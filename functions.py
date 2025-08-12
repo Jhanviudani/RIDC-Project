@@ -23,16 +23,38 @@ def get_secret(key, fallback=None):
         return os.getenv(key) or fallback
 
 # Connect to Supabase
+from sqlalchemy.engine import URL
+from sqlalchemy import create_engine, text
+
 def connect_db():
-    """
-    Establishes a connection to the Supabase PostgreSQL database.
-    
-    Returns:
-        SQLAlchemy engine object for database operations
-    """
-    db_url = f"postgresql+psycopg2://{get_secret('SUPABASE_USER')}:{get_secret('SUPABASE_PASSWORD')}@{get_secret('SUPABASE_HOST')}:{get_secret('SUPABASE_PORT')}/{get_secret('SUPABASE_DB')}"
-    engine = create_engine(db_url)
+    user = get_secret("SUPABASE_USER")
+    pwd  = get_secret("SUPABASE_PASSWORD")
+    host = get_secret("SUPABASE_HOST")
+    db   = get_secret("SUPABASE_DB", "postgres")
+    port = int(get_secret("SUPABASE_PORT", "6543"))
+    ref  = get_secret("SUPABASE_PROJECT_REF")
+
+    if not all([user, pwd, host, db, port, ref]):
+        raise RuntimeError("Missing DB secrets. Need USER, PASSWORD, HOST, PORT, DB, PROJECT_REF.")
+
+    url = URL.create(
+        drivername="postgresql+psycopg",
+        username=user,
+        password=pwd,
+        host=host,
+        port=port,
+        database=db,
+        query={
+            "sslmode": "require",
+            "options": f"project={ref}",  # 👈 required for the pooler
+        },
+    )
+
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 20})
+    with engine.connect() as c:
+        c.execute(text("SELECT 1"))
     return engine
+ 
 
 # Fetch data
 def get_data(query, engine, params=None):

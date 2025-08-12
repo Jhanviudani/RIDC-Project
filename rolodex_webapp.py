@@ -34,6 +34,8 @@ def get_llm_model():
                       openai_api_key=fn.get_secret("OPENAI_API_KEY"))
 
 # UI Components
+
+
 def render_about_tab():
     """Renders the About tab content"""
     st.subheader("About this app")
