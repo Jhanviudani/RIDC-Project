@@ -1,2 +1,0 @@
-sk-proj-[A-Za-z0-9_\-]+==>REDACTED_OPENAI_KEY
-sk-[A-Za-z0-9]{40,}==>REDACTED_OPENAI_KEY

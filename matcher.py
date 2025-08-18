@@ -4,7 +4,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 import time
 
-openai.api_key = "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"
+openai.api_key = "OPENAI_API_KEY" #Pull from secret
 
 SUMMARY_CHAR_LIMIT = 400
 RANK_RATIONALE_WORDS = 35
