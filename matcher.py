@@ -1,120 +1,143 @@
-import requests
-import openai
-import pandas as pd
-from bs4 import BeautifulSoup
+# matcher.py
+import json
+import os
 import time
+from typing import Any, Dict, List, Optional
 
-openai.api_key = "OPENAI_API_KEY" #Pull from secret
+import pandas as pd
+import requests
+
+try:
+    from bs4 import BeautifulSoup
+    HAVE_BS4 = True
+except Exception:
+    HAVE_BS4 = False
 
 SUMMARY_CHAR_LIMIT = 400
 RANK_RATIONALE_WORDS = 35
+MODEL = os.getenv("MATCHER_MODEL", "gpt-4o-mini")
 
-def fetch_text_from_url(url):
+def _get_openai_client():
+    from openai import OpenAI  # modern SDK
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set.")
+    return OpenAI(api_key=api_key)
+
+def _fetch_text(url: str) -> str:
+    if not url or not url.startswith("http"):
+        return ""
     try:
-        res = requests.get(url, timeout=10, headers={"User-Agent": "RolodexScraper/2.0"})
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
-        for tag in soup(["script", "style", "noscript", "iframe"]): tag.decompose()
-        return soup.get_text(separator="\n", strip=True)[:3500]
-    except Exception as e:
-        print(f"❌ Failed to fetch {url}: {e}")
+        r = requests.get(url, timeout=12, headers={"User-Agent": "RolodexMatcher/1.0"})
+        r.raise_for_status()
+        html = r.text
+        if HAVE_BS4:
+            soup = BeautifulSoup(html, "html.parser")
+            for t in soup(["script", "style", "noscript", "iframe"]):
+                try: t.decompose()
+                except Exception: pass
+            return soup.get_text("\n", strip=True)[:5000]
+        return html[:5000]
+    except Exception:
         return ""
 
-def summarize_program(name, founder_needs, raw_text):
-    prompt = f"""You are a research assistant summarizing entrepreneurship support programs.
+def _program_long_text(row: Dict[str, Any]) -> str:
+    desc = (row.get("scraped_description") or "").strip()
+    if desc:
+        return desc[:5000]
+    fetched = _fetch_text((row.get("website") or "").strip())
+    if fetched:
+        return fetched
+    parts = []
+    for k in ("services", "verticals", "product_type"):
+        v = (row.get(k) or "").strip()
+        if v: parts.append(f"{k}: {v}")
+    return " | ".join(parts)[:1500] if parts else "General support program."
 
-Founder Needs:
-{founder_needs}
+def summarize_and_score_from_payload(payload_json: str, founder_needs_text: str,
+                                     per_source_limit: Optional[int] = None,
+                                     sort_by_distance: bool = True) -> pd.DataFrame:
+    """
+    payload_json: JSON list of providers; each has 'programs' and 'source'
+    Returns a DataFrame with per-program scores.
+    """
+    providers: List[Dict[str, Any]] = json.loads(payload_json)
 
-Program Name: {name}
-Website Text:
-{raw_text}
+    # pick nearest N per source if asked
+    def _dist(p):
+        try: return float(p.get("distance"))
+        except Exception: return float("inf")
 
-Output: One 1–2 sentence summary (max {SUMMARY_CHAR_LIMIT} characters) explaining how this program helps founders like the one described."""
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You summarize startup support programs."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3
-        )
-        text = response.choices[0].message.content.strip()
-        print(f"🧾 GPT-3.5 Summary for {name}:{text}")
-        return text[:SUMMARY_CHAR_LIMIT]
-    except Exception as e:
-        print(f"❌ Summary failed for {name}: {e}")
-        return "(Summary not available)"
+    buckets = {"providers": [], "rolodex": []}
+    for p in providers:
+        buckets.setdefault(p.get("source","providers"), []).append(p)
 
-def score_program(name, founder_needs, summary):
-    prompt = f"""
-You are evaluating how well a startup support program fits the needs of a founder.
+    if sort_by_distance:
+        for k in buckets:
+            buckets[k].sort(key=_dist)
 
-Founder Needs:
-{founder_needs}
+    selected: List[Dict[str, Any]] = []
+    for k, items in buckets.items():
+        selected.extend(items[:per_source_limit] if per_source_limit else items)
 
-Program: {name}
-Description: {summary}
+    rows: List[Dict[str, Any]] = []
+    for p in selected:
+        for g in p.get("programs", []):
+            rows.append({
+                "provider_name": p.get("provider_name",""),
+                "Program Name":  g.get("program_name") or (p.get("provider_name","") + " — Program"),
+                "website": g.get("website",""),
+                "scraped_description": g.get("scraped_description",""),
+                "services": g.get("services",""),
+                "verticals": g.get("verticals",""),
+                "product_type": g.get("product_type",""),
+                "source": p.get("source","providers"),
+                "distance": p.get("distance"),
+            })
+    if not rows:
+        return pd.DataFrame()
 
-Instructions:
-- Relevance Score: 0–100
-- Stage Fit: 0–100
-- Overall Score: 0.55*relevance + 0.45*stage_fit
-- Rationale: Brief explanation (<= {RANK_RATIONALE_WORDS} words)
+    client = _get_openai_client()
 
-Respond with JSON like:
-{{"relevance": 75, "stage_fit": 60, "overall": 68.25, "rationale": "Helps with prototyping, early-stage funding."}}
-"""
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You score startup programs."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2
-        )
-        text = response.choices[0].message.content.strip()
-        print(f"📊 GPT-3.5 Score JSON for {name}:\n{text}")
-        return eval(text) if text.startswith("{") else {
-            "relevance": 0, "stage_fit": 0, "overall": 0, "rationale": "Invalid JSON"
-        }
-    except Exception as e:
-        print(f"❌ Scoring failed for {name}: {e}")
-        return {"relevance": 0, "stage_fit": 0, "overall": 0, "rationale": "Scoring failed."}
+    summaries, scores, rationales, dist_scores = [], [], [], []
+    for r in rows:
+        long_text = _program_long_text(r)
+        prompt_sum = f"""Founder Needs:\n{founder_needs_text}\n\nProgram:\n{r['Program Name']}\n\nText:\n{long_text}\n\nWrite a 1–2 sentence summary (≤{SUMMARY_CHAR_LIMIT} chars)."""
+        s = client.chat.completions.create(
+            model=MODEL, temperature=0.3,
+            messages=[{"role":"system","content":"You summarize startup support programs."},
+                      {"role":"user","content":prompt_sum}]
+        ).choices[0].message.content.strip()[:SUMMARY_CHAR_LIMIT]
+        summaries.append(s)
 
+        prompt_score = f"""Founder Needs:\n{founder_needs_text}\n\nProgram: {r['Program Name']}\nSummary: {s}\n\nReturn ONLY JSON: {{"relevance":0-100,"stage_fit":0-100,"overall":float,"rationale":"≤{RANK_RATIONALE_WORDS} words"}}"""
+        try:
+            sc = client.chat.completions.create(
+                model=MODEL, temperature=0.15,
+                messages=[{"role":"system","content":"You score startup support programs."},
+                          {"role":"user","content":prompt_score}]
+            ).choices[0].message.content.strip()
+            data = json.loads(sc)
+            overall = float(data.get("overall", 0.0))
+            rationale = str(data.get("rationale", "")).strip()[:200]
+        except Exception:
+            overall, rationale = 0.0, "Scoring failed."
 
-def summarize_and_score_programs(df, founder_needs):
-    df = df.fillna("")
-    summaries, scores, rationales = [], [], []
+        scores.append(overall)
+        rationales.append(rationale)
 
-    for i, row in df.iterrows():
-        name = row.get("Program Name") or f"Program {i+1}"
-        url = row.get("Website") or row.get("url", "")
-        print(f"🔄 Processing {i+1}/{len(df)}: {name}")
+        d = r.get("distance")
+        try:
+            d = float(d) if d is not None else None
+        except Exception:
+            d = None
+        dist_scores.append(50.0 if d is None else max(0.0, 100.0 - min(100.0, d)))
 
-        if not url or not url.startswith("http"):
-            print(f"⚠️ Skipping invalid URL: {url}")
-            summaries.append("(No URL)")
-            scores.append(0)
-            rationales.append("Missing or invalid URL")
-            continue
+        time.sleep(0.5)
 
-        text = fetch_text_from_url(url)
-        summary = summarize_program(name, founder_needs, text)
-        score = score_program(name, founder_needs, summary)
-
-        summaries.append(summary)
-        scores.append(score.get("overall", 0))
-        rationales.append(score.get("rationale", ""))
-
-        time.sleep(1.5)
-
-    new_cols = pd.DataFrame({
-        "GPT Summary": summaries,
-        "Score": scores,
-        "Rationale": rationales
-    })
-
-    return pd.concat([df.reset_index(drop=True), new_cols], axis=1)
+    df = pd.DataFrame(rows)
+    df["GPT Summary"] = summaries
+    df["Score"] = scores
+    df["Rationale"] = rationales
+    df["distance_score"] = dist_scores
+    return df.sort_values(["Score","distance_score"], ascending=[False, False]).reset_index(drop=True)

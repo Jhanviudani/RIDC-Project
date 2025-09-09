@@ -1,598 +1,510 @@
-# app.py
-
-import streamlit as st
-import pandas as pd
-import pgeocode
-import requests
+# rolodex_webapp.py
 import json
 import os
-from dotenv import load_dotenv
+import math
+import pandas as pd
+import pgeocode
 import pydeck as pdk
 import plotly.express as px
-import plotly.graph_objects as go
+import requests
+import streamlit as st
+from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
 
 import functions as fn
 
-# Load environment variables
 load_dotenv()
 
-# Initialize database connection
+# ---------------- Cache: DB & LLM ----------------
 @st.cache_resource
 def get_db_engine():
     return fn.connect_db()
 
-# Initialize LLM model
 @st.cache_resource
 def get_llm_model():
-    return ChatOpenAI(model="gpt-4o",
-                      temperature=0.2,
-                      max_tokens=2000,  
-                      openai_api_key=fn.get_secret("OPENAI_API_KEY"))
+    return ChatOpenAI(
+        model="gpt-4o",
+        temperature=0.2,
+        max_tokens=2000,
+        openai_api_key=fn.get_secret("OPENAI_API_KEY"),
+    )
 
-# UI Components
-
-
+# ---------------- Tabs ----------------
 def render_about_tab():
-    """Renders the About tab content"""
     st.subheader("About this app")
     st.write(
         """
-        This app provides an overview of the entrepreneurial ecosystem in Southwestern Pennsylvania (SWPA). 
-        It maps the regional service providers and entrepreneurs, helping to evaluate the resource demands 
-        and capabilities of local stakeholders. Using this app, you can explore the following features:
-        
-        - **📍 Service Providers Map**: Visualize the locations of service providers and entrepreneurs in SWPA.
-        - **📊 Entrepreneur Needs Distribution**: Analyze the distribution of entrepreneur needs by county, helping to identify areas of demand.
-        - **🧩 Program Matching Tool**: Find suitable programs for entrepreneurs based on their needs and the services offered by providers.
-        - **📄 Program Details**: Access detailed information about various programs available in the region.
+        This app maps SWPA’s innovation ecosystem, analyzes entrepreneur needs,
+        and recommends programs using data from **Providers** (intake form) and the **Rolodex**.
         """
     )
-    st.markdown("""---""")
-    st.write("🚀 If you are and entrepreneur looking for support, please fill out the [Entrepreneur Intake Form](https://forms.gle/eMw5PY9QeTXDqPhy6) to help us understand your needs.")
-    st.write("🧰 If you are a service provider looking to be included, please fill out the [Service Provider Intake Form](https://forms.gle/aae3SA6YJaZ7d1et5) to help us understand your services.")
+    st.markdown("---")
+    st.write("🚀 Entrepreneurs: [Intake Form](https://forms.gle/eMw5PY9QeTXDqPhy6)")
+    st.write("🧰 Service Providers: [Intake Form](https://forms.gle/aae3SA6YJaZ7d1et5)")
 
 def render_overview_tab(engine):
-    """Renders the Rolodex Overview tab with map visualization"""
-    st.subheader("📍 Service Providers in Southwestern Pennsylvania")
-    
-    # Original query preserved
-    query_zipcode_providers = """
-    SELECT provider_id as id, provider_name as name, address, zipcode, 'Provider' as user 
-    FROM providers 
-    UNION 
-    SELECT entrepreneur_id as id, business_name as name, address, zipcode, 'Entrepreneur' as user 
+    st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex")
+
+    # Providers & Entrepreneurs (ZIP → lat/long)
+    q_zip = """
+    SELECT provider_id AS id, provider_name AS name, address, zipcode, 'Provider' AS user
+    FROM providers
+    UNION
+    SELECT entrepreneur_id AS id, business_name AS name, address, zipcode, 'Entrepreneur' AS user
     FROM entrepreneurs;
     """
-    
-    # Get data and add coordinates
-    df_zipcode_providers = fn.get_data(query_zipcode_providers, engine)
-    df_zipcode_providers = fn.add_coordinates(df_zipcode_providers)
-    map_df = df_zipcode_providers.dropna(subset=['latitude', 'longitude'])
-    
-    # Assign color to each row
+    df_zip = fn.get_data(q_zip, engine)
+    df_zip = fn.add_coordinates(df_zip)                # adds latitude/longitude from zipcode
+    map_df_pe = df_zip.dropna(subset=["latitude", "longitude"])
+
+    # Rolodex points (already have lat/long)
+    q_rolo = """
+    SELECT
+      org_name AS name,
+      COALESCE(address,'') AS address,
+      latitude, longitude,
+      'Rolodex' AS user
+    FROM rolodex_points;
+    """
+    try:
+        df_rolo = fn.get_data(q_rolo, engine).dropna(subset=["latitude", "longitude"])
+    except Exception:
+        df_rolo = pd.DataFrame(columns=["name", "address", "latitude", "longitude", "user"])
+
+    # Colors
     dynamic_color_map = {
-        'Provider': fn.hex_to_rgb('#00FF00'),  # Green
-        'Entrepreneur': fn.hex_to_rgb('#0000FF')  # Blue
+        "Provider": fn.hex_to_rgb("#00FF00"),
+        "Entrepreneur": fn.hex_to_rgb("#0000FF"),
+        "Rolodex": fn.hex_to_rgb("#FFA500"),
     }
-    map_df['color'] = map_df['user'].map(dynamic_color_map)
-    
-    # Load and filter counties
+    if not map_df_pe.empty:
+        map_df_pe["color"] = map_df_pe["user"].map(dynamic_color_map)
+    if not df_rolo.empty:
+        df_rolo["color"] = df_rolo["user"].map(dynamic_color_map)
+
+    # SWPA counties outline
     geojson_url = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
-    response = requests.get(geojson_url)
-    us_counties = response.json()
     swpa_fips = ["42003", "42005", "42007", "42019", "42051", "42059", "42063", "42073", "42125", "42129"]
-    swpa_counties = {
+    us_counties = requests.get(geojson_url).json()
+    swpa_geo = {
         "type": "FeatureCollection",
-        "features": [feature for feature in us_counties['features'] if feature['id'] in swpa_fips]
+        "features": [f for f in us_counties["features"] if f["id"] in swpa_fips],
     }
-    
-    st.subheader("Service Providers Map")
-    
-    # Legend for the map
+
+    # Layers
+    layers = [
+        pdk.Layer(
+            "GeoJsonLayer",
+            data=swpa_geo,
+            opacity=0.2,
+            stroked=True,
+            filled=True,
+            get_fill_color=[200, 200, 200],
+            get_line_color=[0, 0, 0],
+            get_line_width=2,
+        ),
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=map_df_pe,
+            get_position=["longitude", "latitude"],
+            get_color="color",
+            get_radius=1000,
+            pickable=True,
+            radius_min_pixels=5,
+            radius_max_pixels=15,
+        ),
+    ]
+    if not df_rolo.empty:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=df_rolo,
+                get_position=["longitude", "latitude"],
+                get_color="color",
+                get_radius=1000,
+                pickable=True,
+                radius_min_pixels=5,
+                radius_max_pixels=15,
+            )
+        )
+
+    # Center the map
+    combined = pd.concat([map_df_pe, df_rolo], ignore_index=True) if not df_rolo.empty else map_df_pe
+    if combined.empty:
+        st.info("No map points to show yet.")
+        return
+
+    view_state = pdk.ViewState(
+        latitude=combined["latitude"].mean(),
+        longitude=combined["longitude"].mean(),
+        zoom=8,
+    )
+
+    # Legend
     st.markdown(
         """
-        <div style='display: flex; align-items: center; margin-bottom: 10px;'>
-            <div style='background-color: #00FF00; width: 15px; height: 15px; margin-right: 5px;'></div>
-            <span style='margin-right: 15px;'>Service Provider</span>
-            <div style='background-color: #0000FF; width: 15px; height: 15px; margin-right: 5px;'></div>
-            <span>Entrepreneur</span>
+        <div style='display:flex;gap:16px;align-items:center;margin-bottom:8px'>
+          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#00FF00'></div>Provider</span>
+          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#0000FF'></div>Entrepreneur</span>
+          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#FFA500'></div>Rolodex</span>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-    
-    # Create the map visualization
-    scatter_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=map_df,
-        get_position=["longitude", "latitude"],
-        get_color="color",
-        get_radius=1000,
-        pickable=True,
-        opacity=0.8,
-        stroked=True,
-        filled=True,
-        radius_min_pixels=5,
-        radius_max_pixels=15,
+
+    st.pydeck_chart(
+        pdk.Deck(
+            map_style="mapbox://styles/mapbox/light-v9",
+            initial_view_state=view_state,
+            layers=layers,
+            tooltip={"html": "<b>{name}</b><br/>{user}<br/>{address}"},
+        )
     )
-    
-    geojson_layer = pdk.Layer(
-        "GeoJsonLayer",
-        data=swpa_counties,
-        opacity=0.2,
-        stroked=True,
-        filled=True,
-        extruded=False,
-        wireframe=True,
-        get_fill_color=[200, 200, 200],
-        get_line_color=[0, 0, 0],
-        get_line_width=2,
-        line_width_min_pixels=1,
+
+    st.markdown(
+        f"""
+        **Stats**
+        - Providers: {len(map_df_pe[map_df_pe['user']=='Provider'])}
+        - Entrepreneurs: {len(map_df_pe[map_df_pe['user']=='Entrepreneur'])}
+        - Rolodex points: {len(df_rolo) if not df_rolo.empty else 0}
+        """
     )
-    
-    view_state = pdk.ViewState(
-        latitude=map_df["latitude"].mean(),
-        longitude=map_df["longitude"].mean(),
-        zoom=8,
-        pitch=0,
-    )
-    
-    map_view = pdk.Deck(
-        map_style="mapbox://styles/mapbox/light-v9",
-        initial_view_state=view_state,
-        layers=[geojson_layer, scatter_layer],
-        tooltip={
-            "html": "<b>{name}</b><br/>{user}<br/>{address}",
-            "style": {"backgroundColor": "white", "color": "black"},
-        },
-    )
-    
-    st.pydeck_chart(map_view)
-    
-    # Display statistics
-    provider_count = len(map_df[map_df['user'] == 'Provider'])
-    entrepreneur_count = len(map_df[map_df['user'] == 'Entrepreneur'])
-    
-    st.markdown(f"""
-    ### Ecosystem Statistics
-    - **Total Service Providers**: {provider_count}
-    - **Total Entrepreneurs**: {entrepreneur_count}
-    """)
 
 def render_needs_tab(engine):
-
-    ##############################################
-    # ENTREPRENEUR NEEDS
-    ##############################################
-    """Renders the Needs tab with needs analysis"""
-    st.subheader("📊 Entrepreneur Needs Analysis")
-    
-    # Get needs data
-    query_needs = """
+    st.subheader("📊 Entrepreneur Needs")
+    q_needs = """
     SELECT en.entrepreneur_id, e.county, en.need, en.service
-    FROM entrepreneur_needs AS en
-    JOIN entrepreneurs AS e
-    ON en.entrepreneur_id = e.entrepreneur_id
-    AND en.date_intake = e.date_intake;
+    FROM entrepreneur_needs en
+    JOIN entrepreneurs e
+      ON en.entrepreneur_id = e.entrepreneur_id
+     AND en.date_intake = e.date_intake;
     """
-    needs_data = fn.get_data(query_needs, engine)
-    
-    if not needs_data.empty:
-        # @st.cache_data
-        needs_df = fn.get_data(query_needs, engine)
+    needs_df = fn.get_data(q_needs, engine)
 
-        # Multiselect for services
-        unique_services = needs_df['service'].dropna().unique().tolist()
-        selected_services = st.multiselect(
-            "Select Services to Display:",
-            options=sorted(unique_services),
-            default=sorted(unique_services)
-        )
-
-        # Filter needs
-        if selected_services:
-            filtered_needs_df = needs_df[needs_df['service'].isin(selected_services)]
-        else:
-            filtered_needs_df = needs_df.copy()
-
-        # Group by county and need
-        needs_count = filtered_needs_df.groupby(['county', 'need']).size().reset_index(name='count')
-
-        county_chart = px.bar(
-            needs_count,
-            x='county',
-            y='count',
-            color='need',
-            title="Entrepreneur Needs by County (Filtered by Services)",
-            labels={'count': 'Number of Needs', 'county': 'County'},
-        )
-        
-        county_chart.update_layout(
-            barmode='stack',
-            xaxis_title="County",
-            yaxis_title="Number of Needs",
-            legend_title="Need Type",
-            title_x=0.5,
-        )
-        
-        st.plotly_chart(county_chart)
-
-        ##############################################
-        # ENTREPRENEUR SERVICES NEEDED BY COUNTY
-        ##############################################
-
-        # Group needs by County and Service
-        needs_grouped = needs_df.groupby(['county', 'service']).size().reset_index(name='count')
-
-        # Calculate total needs per county
-        county_totals = needs_grouped.groupby('county')['count'].sum().reset_index(name='total_count')
-        needs_grouped = needs_grouped.merge(county_totals, on='county')
-        needs_grouped['percent'] = (needs_grouped['count'] / needs_grouped['total_count'] * 100).round(1)
-
-        # Plot Treemap
-        st.subheader("Entrepreneur Service type requirement by County")
-
-        treemap = px.treemap(
-            needs_grouped,
-            path=['county', 'service'],
-            values='count',
-            color='county',
-            color_discrete_sequence=px.colors.qualitative.Plotly,
-            hover_data={
-                'count': True,
-                'percent': True,
-                'county': False,
-                'service': False,
-                'total_count': False
-            }
-        )
-
-        treemap.update_traces(
-            textfont=dict(
-                family='Arial',
-                color='black'
-            ),
-            texttemplate='%{label}'
-        )
-
-        treemap.update_layout(
-            margin=dict(t=50, l=25, r=25, b=25)
-        )
-
-        st.plotly_chart(treemap)
-    else:
+    if needs_df.empty:
         st.info("No needs data available.")
+        return
+
+    services = sorted(needs_df["service"].dropna().unique().tolist())
+    selected = st.multiselect("Filter by service(s)", services, default=services)
+    filtered = needs_df[needs_df["service"].isin(selected)] if selected else needs_df
+
+    counts = filtered.groupby(["county", "need"]).size().reset_index(name="count")
+    fig = px.bar(counts, x="county", y="count", color="need", title="Needs by County")
+    fig.update_layout(barmode="stack", title_x=0.5)
+    st.plotly_chart(fig)
 
 def render_programs_tab(engine):
-    """Renders the Programs tab with program information"""
-    st.subheader("🔍📄 Available Programs")
-    
-    # Get programs data
-    query_programs = """SELECT  DISTINCT ON (t2.provider_id, t2.program_id)
-                t2.provider_id, t2.provider_name, t2.program_id, t2.program_name,  t2.website,  t2.contact_name,  t2.contact_email, 
-                t1.county, t1.address, t2.services, t2.verticals,  t2.product_type,
-                CONCAT_WS(' - ', CONCAT('ALL: ',t2.core_audience_all),
-                CONCAT('Ecosystem Org (IA, Nonprofit etc): ',t2.core_audience_ecosystem),
-                CONCAT('Entrepreneur: ',t2.core_audience_entrepreneur),
-                CONCAT('Startups: ',t2.core_audience_startups),
-                CONCAT('SMEs/Companies: ',t2.core_audience_sme),
-                CONCAT('University Students: ',t2.core_audience_ustudents),
-                CONCAT('K-12 Students: ',t2.core_audience_k12students)) as core_audience,
-                CONCAT_WS(' - ', 
-                    CASE WHEN t2.growth_stage_discovery = 1 THEN 'Discovery/ Idea/ Individual Stage: Poorly suited'
-                    WHEN t2.growth_stage_discovery = 2 THEN 'Discovery/ Idea/ Individual Stage: Somewhat suited'
-                    WHEN t2.growth_stage_discovery = 3 THEN 'Discovery/ Idea/ Individual Stage: Moderately suited'
-                    WHEN t2.growth_stage_discovery = 4 THEN 'Discovery/ Idea/ Individual Stage: Well suited'
-                    WHEN t2.growth_stage_discovery = 5 THEN 'Discovery/ Idea/ Individual Stage: Perfectly suited'
-                    ELSE 'Discovery/ Idea/ Individual Stage: Not suited' END,
-                    CASE WHEN t2.growth_stage_early = 1 THEN 'Early Stage: Poorly suited'
-                    WHEN t2.growth_stage_early = 2 THEN 'Early Stage: Somewhat suited'
-                    WHEN t2.growth_stage_early = 3 THEN 'Early Stage: Moderately suited'
-                    WHEN t2.growth_stage_early = 4 THEN 'Early Stage: Well suited'
-                    WHEN t2.growth_stage_early = 5 THEN 'Early Stage: Perfectly suited'
-                    ELSE 'Early Stage: Not suited' END,
-                    CASE WHEN t2.growth_stage_growth = 1 THEN 'Growth Stage: Poorly suited'
-                    WHEN t2.growth_stage_growth = 2 THEN 'Growth Stage: Somewhat suited'
-                    WHEN t2.growth_stage_growth = 3 THEN 'Growth Stage: Moderately suited'
-                    WHEN t2.growth_stage_growth = 4 THEN 'Growth Stage: Well suited'
-                    WHEN t2.growth_stage_growth = 5 THEN 'Growth Stage: Perfectly suited'
-                    ELSE 'Growth Stage: Not suited' END,
-                    CASE WHEN t2.growth_stage_mature = 1 THEN 'Mature Stage: Poorly suited'
-                    WHEN t2.growth_stage_mature = 2 THEN 'Mature Stage: Somewhat suited'
-                    WHEN t2.growth_stage_mature = 3 THEN 'Mature Stage: Moderately suited'
-                    WHEN t2.growth_stage_mature = 4 THEN 'Mature Stage: Well suited'
-                    WHEN t2.growth_stage_mature = 5 THEN 'Mature Stage: Perfectly suited'
-                    ELSE 'Mature Stage: Not suited' END
-                ) AS growth_stage
-                FROM  programs t2 INNER JOIN providers t1
-                    ON t1.provider_id = t2.provider_id
-                ORDER BY t2.provider_id, t2.program_id, t2.date_intake_form DESC;"""
-    
-    df_programs = fn.get_data(query_programs, engine)
-    
-    if not df_programs.empty:
-    
-    ##############################################
-    # PROGRAMS OVERVIEW BY VERTICALS AND COUNTIES
-    ##############################################
-        
-        # Create a bar chart for verticals and counties
-        st.subheader("Programs Overview by Verticals and Counties")
-        
-        # Multiselect for verticals
-        verticals = fn.extract_unique_items(df_programs, 'verticals')
-        if '' in verticals:
-            verticals.remove('')
+    st.subheader("🔍📄 Programs (Providers + Rolodex)")
 
-        selected_verticals = st.multiselect(
-            "Select Verticals to Display:",
-            options=sorted(verticals),
-            default=sorted(verticals)
-        )
-        
-        #counties
-        counties = sorted(df_programs['county'].dropna().unique().tolist())
+    # A) Provider programs
+    q_form = """
+    SELECT DISTINCT ON (t2.provider_id, t2.program_id)
+      t2.provider_id, t2.provider_name, t2.program_id, t2.program_name,
+      t2.website, t2.contact_name, t2.contact_email,
+      t1.county, t1.address,
+      t2.services, t2.verticals, t2.product_type,
+      t2.scraped_description
+    FROM programs t2
+    JOIN providers t1 ON t1.provider_id = t2.provider_id
+    ORDER BY t2.provider_id, t2.program_id, t2.date_intake_form DESC;
+    """
+    df_form = fn.get_data(q_form, engine)
+    df_form["source"] = "providers"
 
-        # Filter programs by selected verticals
-        if selected_verticals:
-            df_programs_filtered = df_programs[df_programs['verticals'].isin(selected_verticals)]
-        else:
-            df_programs_filtered = df_programs.copy()
-        
-        
-        # Reorganize the data for better visualization. For each vertical in verticals, create a new row for each county.
-        verticals_count2 = {'verticals': [], 'county': [], 'count': []}
-        for vert in verticals:
-            for row in df_programs[['county', 'verticals']].itertuples():
-                # print(vert, "is in:", row.verticals,": ", vert in row.verticals)
-                if vert in row.verticals:
-                    verticals_count2['verticals'].append(vert)
-                    verticals_count2['county'].append(row.county)
-                    verticals_count2['count'].append(1)
+    # B) Rolodex programs (flattened)
+    q_rolo = """
+    SELECT
+      org_name AS provider_name,
+      program_name,
+      COALESCE(website,'') AS website,
+      '' AS contact_name,
+      '' AS contact_email,
+      COALESCE(county_hq,'') AS county,
+      COALESCE(address,'') AS address,
+      COALESCE(primary_service,'') AS services,
+      COALESCE(attributes->>'Vertical(s) Summary','')     AS verticals,
+      COALESCE(attributes->>'Product Type(s) Summary','') AS product_type,
+      COALESCE(full_description, description, '') AS scraped_description
+    FROM rolodex_points;
+    """
+    try:
+        df_rolo = fn.get_data(q_rolo, engine)
+    except Exception:
+        df_rolo = pd.DataFrame()
+    df_rolo["source"] = "rolodex"
 
-        verticals_count = pd.DataFrame(verticals_count2)
+    # C) Union
+    common = [
+        "provider_name", "program_name", "website", "contact_name", "contact_email",
+        "county", "address", "services", "verticals", "product_type",
+        "scraped_description", "source"
+    ]
+    for c in common:
+        if c not in df_form: df_form[c] = ""
+        if c not in df_rolo: df_rolo[c] = ""
+    df_all = pd.concat([df_form[common], df_rolo[common]], ignore_index=True)
 
-        # Group by verticals and counties
-        verticals_count = verticals_count.groupby(['verticals', 'county']).sum('count').reset_index()
+    if df_all.empty:
+        st.info("No programs found yet.")
+        return
 
-        # Create a bar chart
-        program_verticals = px.bar(
-            verticals_count,
-            x='county',
-            y='count',
-            color='verticals',
-            title="Programs Overview by Verticals and Counties",
-            labels={'count': 'Number of Programs', 'county': 'County'},
-        )
-        
-        program_verticals.update_layout(
-            barmode='stack',
-            xaxis_title="County",
-            yaxis_title="Number of Programs",
-            legend_title="Vertical",
-            title_x=0.5,
-        )
-        
-        st.plotly_chart(program_verticals)
-    
-    ##############################################
-    # PROGRAM DETAILS
-    ##############################################
-    
-    # Prepare filter options
-        provider_names = sorted(df_programs['provider_name'].dropna().unique().tolist())
-        product_types = fn.extract_unique_items(df_programs, 'product_type')
+    # Filters
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        provider = st.selectbox("Provider", ["All"] + sorted(df_all["provider_name"].dropna().unique().tolist()))
+    with col2:
+        county = st.selectbox("County", ["All"] + sorted(df_all["county"].dropna().unique().tolist()))
+    with col3:
+        src = st.selectbox("Source", ["All", "providers", "rolodex"])
 
-        # Build filters
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_provider = st.selectbox("Filter by Provider", ["All"] + provider_names)
-            selected_county = st.selectbox("Filter by County", ["All"] + counties)
-        with col2:
-            selected_product_type = st.selectbox("Filter by Product Type", ["All"] + product_types)
-            selected_vertical = st.selectbox("Filter by Vertical", ["All"] + verticals)
+    verticals = fn.extract_unique_items(df_all, "verticals")
+    product_types = fn.extract_unique_items(df_all, "product_type")
+    v = st.selectbox("Vertical", ["All"] + verticals)
+    p = st.selectbox("Product Type", ["All"] + product_types)
 
-        # Apply filters
-        filtered_programs = df_programs.copy()
+    f = df_all.copy()
+    if provider != "All": f = f[f["provider_name"] == provider]
+    if county   != "All": f = f[f["county"] == county]
+    if src      != "All": f = f[f["source"] == src]
+    if v        != "All": f = f[f["verticals"].str.contains(v, na=False)]
+    if p        != "All": f = f[f["product_type"].str.contains(p, na=False)]
 
-        if selected_provider != "All":
-            filtered_programs = filtered_programs[filtered_programs['provider_name'] == selected_provider]
-        if selected_county != "All":
-            filtered_programs = filtered_programs[filtered_programs['county'] == selected_county]
-        if selected_product_type != "All":
-            filtered_programs = filtered_programs[filtered_programs['product_type'].str.contains(selected_product_type, na=False)]
-        if selected_vertical != "All":
-            filtered_programs = filtered_programs[filtered_programs['verticals'].str.contains(selected_vertical, na=False)]
-
-        # Display
-        st.markdown(f"**{len(filtered_programs)}** program(s) match the selected criteria.")
-        st.dataframe(filtered_programs)
-    else:
-        st.info("No programs data available.")
+    st.markdown(f"**{len(f)}** program(s) match the selected filters.")
+    st.dataframe(f, use_container_width=True)
 
 def render_matching_tab(engine, model):
-    """Renders the Matching tool tab"""
-    st.subheader("🎯 Entrepreneur Assistant: Program Recommendation")
-    
-    ##############################################
-    # MATCHING ENTREPRENEURS TO PROVIDERS
-    ##############################################
+    """Renders the Matching tool tab (Providers + Rolodex) with robust JSON parsing."""
+    import pandas as pd
+    import json
 
-    query_providers = """SELECT DISTINCT ON (provider_id)
-                                provider_id,
-                                provider_name,
-                                address,
-                                description,
-                                zipcode,
-                                county,
-                                "BBB",
-                                programs_available
-                                FROM providers
-                                ORDER BY provider_id, date_intake_form DESC; """
-    
-    query_programs = """
-    SELECT  DISTINCT ON (provider_id, program_id)
-    provider_id, program_id,
-    program_name,  website,  contact_name,  contact_email,  services,
-    CONCAT_WS(' - ', CONCAT('ALL: ',core_audience_all),
-    CONCAT('Ecosystem Org (IA, Nonprofit etc): ',core_audience_ecosystem),
-    CONCAT('Entrepreneur: ',core_audience_entrepreneur),
-    CONCAT('Startups: ',core_audience_startups),
-    CONCAT('SMEs/Companies: ',core_audience_sme),
-    CONCAT('University Students: ',core_audience_ustudents),
-    CONCAT('K-12 Students: ',core_audience_k12students)) as core_audience,
-    CONCAT_WS(' - ', 
-        CASE WHEN growth_stage_discovery = 1 THEN 'Discovery/ Idea/ Individual Stage: Poorly suited'
-        WHEN growth_stage_discovery = 2 THEN 'Discovery/ Idea/ Individual Stage: Somewhat suited'
-        WHEN growth_stage_discovery = 3 THEN 'Discovery/ Idea/ Individual Stage: Moderately suited'
-        WHEN growth_stage_discovery = 4 THEN 'Discovery/ Idea/ Individual Stage: Well suited'
-        WHEN growth_stage_discovery = 5 THEN 'Discovery/ Idea/ Individual Stage: Perfectly suited'
-        ELSE 'Discovery/ Idea/ Individual Stage: Not suited' END,
-        CASE WHEN growth_stage_early = 1 THEN 'Early Stage: Poorly suited'
-        WHEN growth_stage_early = 2 THEN 'Early Stage: Somewhat suited'
-        WHEN growth_stage_early = 3 THEN 'Early Stage: Moderately suited'
-        WHEN growth_stage_early = 4 THEN 'Early Stage: Well suited'
-        WHEN growth_stage_early = 5 THEN 'Early Stage: Perfectly suited'
-        ELSE 'Early Stage: Not suited' END,
-        CASE WHEN growth_stage_growth = 1 THEN 'Growth Stage: Poorly suited'
-        WHEN growth_stage_growth = 2 THEN 'Growth Stage: Somewhat suited'
-        WHEN growth_stage_growth = 3 THEN 'Growth Stage: Moderately suited'
-        WHEN growth_stage_growth = 4 THEN 'Growth Stage: Well suited'
-        WHEN growth_stage_growth = 5 THEN 'Growth Stage: Perfectly suited'
-        ELSE 'Growth Stage: Not suited' END,
-        CASE WHEN growth_stage_mature = 1 THEN 'Mature Stage: Poorly suited'
-        WHEN growth_stage_mature = 2 THEN 'Mature Stage: Somewhat suited'
-        WHEN growth_stage_mature = 3 THEN 'Mature Stage: Moderately suited'
-        WHEN growth_stage_mature = 4 THEN 'Mature Stage: Well suited'
-        WHEN growth_stage_mature = 5 THEN 'Mature Stage: Perfectly suited'
-        ELSE 'Mature Stage: Not suited' END
-    ) AS growth_stage,
-    verticals,  product_type,  scraped_description
-    FROM programs
-    ORDER BY provider_id, program_id, date_intake_form DESC;"""
-    # @st.cache_data
-    df_providers = fn.get_data(query_providers, engine)
-    # @st.cache_data
-    df_programs = fn.get_data(query_programs, engine)
+    st.subheader("🎯 Program Recommendations (Providers + Rolodex)")
 
-    # Convert the DataFrame to JSON format
-    json_data_prov_prog = fn.df_to_json_nest(df_providers, df_programs, join_key="provider_id", child_key="programs")
+    # --------- Load entrepreneurs + needs (unchanged) ----------
+    q_ent = """
+      SELECT DISTINCT ON (entrepreneur_id)
+             entrepreneur_id, name, business_name, email, phone, address, zipcode,
+             website, profile, growth_stage, vertical, county
+      FROM entrepreneurs
+      ORDER BY entrepreneur_id, date_intake DESC;
+    """
+    q_needs = """
+      SELECT DISTINCT ON (entrepreneur_id, need, date_intake)
+             entrepreneur_id, service, need
+      FROM entrepreneur_needs
+      ORDER BY entrepreneur_id, need, date_intake DESC;
+    """
+    df_entrep = fn.get_data(q_ent, engine)
+    df_needs  = fn.get_data(q_needs, engine)
+    json_entrep = fn.df_to_json_nest(df_entrep, df_needs,
+                                     join_key="entrepreneur_id",
+                                     child_key="needs_needed")
 
-    query_entrepreneurs = """
-    SELECT  DISTINCT ON (entrepreneur_id) entrepreneur_id, name,  business_name,  
-    email,  phone,  address,  zipcode,  website,  profile,
-    growth_stage,  vertical,  county
-    FROM entrepreneurs
-    ORDER BY entrepreneur_id, date_intake DESC;
-    ;"""
+    if df_entrep.empty:
+        st.info("No entrepreneurs found yet.")
+        return
 
-    query_needs = """
-    SELECT DISTINCT ON (entrepreneur_id, need, date_intake) 
-    entrepreneur_id, service,  need
-    FROM entrepreneur_needs
-    ORDER BY entrepreneur_id, need, date_intake DESC"""
-    # @st.cache_data
-    df_entrep = fn.get_data(query_entrepreneurs, engine)
-    # @st.cache_data
-    df_needs = fn.get_data(query_needs, engine)
+    # Select one entrepreneur
+    business_names = df_entrep["business_name"].dropna().unique().tolist()
+    selected_business = st.selectbox("Select an Entrepreneur", business_names)
+    sel = [e for e in json_entrep if e.get("business_name") == selected_business]
+    if not sel:
+        st.warning("Entrepreneur record not found.")
+        return
+    entrepreneur = sel[0]
 
-    # Convert the DataFrame to JSON format
-    json_data_entrep_needs = fn.df_to_json_nest(df_entrep, df_needs, join_key="entrepreneur_id", child_key="needs_needed")
+    # --------- Build combined provider payload (providers + rolodex) ----------
+    try:
+        payload = fn.build_matching_payload(
+            engine,
+            entrepreneur_zip=entrepreneur.get("zipcode")
+        )
+    except Exception as e:
+        st.error(f"Failed to build provider payload: {e}")
+        return
 
-    # Your entrepreneurs dataframe (already loaded elsewhere in your app)
-    # Assume df_entrep_needs is already loaded
+    # Keep only providers that actually have at least one program
+    full_payload = [p for p in payload if p.get("programs")]
+    if not full_payload:
+        st.info("No programs available to evaluate.")
+        return
 
-    # Select Entrepreneur
-    entrepreneur_business = df_entrep['business_name'].unique().tolist()
-    selected_entrepreneur_business = st.selectbox("Select an Entrepreneur", entrepreneur_business)
-    # Filter entrepreneur info
-    entrepreneur_info = [item for item in json_data_entrep_needs if item.get("business_name") == selected_entrepreneur_business]
+    total_form  = sum(1 for p in full_payload if p.get("source") == "providers")
+    total_rolo  = sum(1 for p in full_payload if p.get("source") == "rolodex")
+    st.caption(f"Evaluating {len(full_payload)} providers "
+               f"({total_form} from form intake / {total_rolo} from rolodex).")
 
-    # estimate the distance between the entrepreneur and the providers using fn.estimate_zipcode_distance
-    if entrepreneur_info:
-        entrepreneur_info = entrepreneur_info[0]
-        entrepreneur_zipcode = entrepreneur_info.get("zipcode")
-        if entrepreneur_zipcode:
-            for provider in json_data_prov_prog:
-                provider_zipcode = provider['zipcode']
-            # Calculate distances and add to JSON data
-                provider['distance'] = fn.estimate_zipcode_distance(
-                    entrepreneur_zipcode, provider_zipcode)
-    
-    # Load programs and providers JSON
-    programs_providers = json.dumps(json_data_prov_prog)
+    # Helper to chunk the payload so we don't overflow the model context
+    def _batches(items, size):
+        for i in range(0, len(items), size):
+            yield i // size + 1, items[i:i+size]
 
-    # # Run Button
-    run_button = st.button("Run Program Recommendation Assistant")
+    BATCH_SIZE = 60  # tune if you want larger/smaller batches
 
-    if run_button:
-            
-        # Match Entrepreneur to Providers
-        program_recomendation_response = fn.match_programs_to_entrepreneur(entrepreneur_info, programs_providers, model)
+    run = st.button("Run Program Recommendation Assistant")
+    if not run:
+        return
 
-        # Display Entrepreneur Info
-        st.subheader("Entrepreneur summary")
-        entrepreneur_summary = fn.summarize_user_identity_and_needs(entrepreneur_info, model)
-        st.write(entrepreneur_summary)
+    progress = st.progress(0.0)
+    all_matches = []
+    num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
-        # Try to Parse into DataFrame
+    for b_idx, batch in _batches(full_payload, BATCH_SIZE):
+        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
+        batch_json = json.dumps(batch)
+
+        # Call the LLM and parse JSON safely
+        resp_text = fn.match_programs_to_entrepreneur(entrepreneur, batch_json, model)
         try:
-            matches = json.loads(program_recomendation_response)
-            # final score
-            for match in matches:
-                match['final_score'] = (match['distance_score'] + match['identity_score'] + match['service_score'] + match['need_satisfaction_score']) / 4
-            
-            # Display recommendation summary
-            st.subheader("Program Recommendations")
-            recommendation_summary = fn.summarize_recommendations(entrepreneur_info, matches, model)
-            st.write(recommendation_summary)
-
-            matches_df = pd.DataFrame(matches).sort_values(by='final_score', ascending=False)
-            
-            st.subheader("Structured Recommendations")
-            st.dataframe(matches_df)
-            
-            # Button to insert into database
-            if st.button("Send Results to Database"):
-                matches_df["date"] = pd.Timestamp.now()
-                fn.insert_data_to_supabase(matches_df, 'needs_match')
-
+            parsed = fn.coerce_json_array(resp_text)
+            # tag results with batch for debugging
+            for m in parsed:
+                m["batch_index"] = b_idx
+            all_matches.extend(parsed)
         except Exception as e:
-            st.error(f"Failed to parse assistant response into structured data: {e}")
+            st.error(f"Failed to generate recommendations: {e}")
+            with st.expander(f"Raw model output (batch {b_idx})"):
+                st.code((resp_text or "")[:4000])
+        progress.progress(b_idx / float(num_batches))
+
+    if not all_matches:
+        st.error("No matches returned from any batch.")
+        return
+
+    # --------- Deduplicate & finalize scores ----------
+    deduped, seen = [], set()
+    for m in all_matches:
+        key = (str(m.get("provider_id")), m.get("program_name"))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        # ensure numeric scores and a final_score
+        for k in ("distance_score", "identity_score", "service_score", "need_satisfaction_score"):
+            try:
+                m[k] = float(m.get(k, 0) or 0)
+            except Exception:
+                m[k] = 0.0
+        if "final_score" not in m:
+            m["final_score"] = (
+                m["distance_score"]
+                + m["identity_score"]
+                + m["service_score"]
+                + m["need_satisfaction_score"]
+            ) / 4.0
+
+        deduped.append(m)
+
+    # --------- Summaries ----------
+    st.subheader("Entrepreneur summary")
+    try:
+        summary = fn.summarize_user_identity_and_needs(entrepreneur, model)
+        st.write(summary)
+    except Exception:
+        st.write("Summary unavailable.")
+
+    st.subheader("Program Recommendations (merged across batches)")
+    try:
+        rec_summary = fn.summarize_recommendations(entrepreneur, deduped, model)
+        st.write(rec_summary)
+    except Exception:
+        st.write("Recommendation summary unavailable.")
+
+    # --------- Table ----------
+    matches_df = pd.DataFrame(deduped).sort_values("final_score", ascending=False)
+    st.subheader(f"Structured Recommendations · {len(matches_df)} unique results")
+    st.dataframe(matches_df, use_container_width=True)
+
+    # Optional export to DB
+    if st.button("Send Results to Database"):
+        try:
+            matches_df["date"] = pd.Timestamp.now()
+            fn.insert_data_to_supabase(matches_df, "needs_match")
+            st.success("Saved to database.")
+        except Exception as e:
+            st.error(f"Failed to save: {e}")
+
+    # Debug preview of payload actually used
+    with st.expander("Preview: first 3 providers from the full payload"):
+        preview = []
+        for p in full_payload[:3]:
+            preview.append({
+                "source": p.get("source"),
+                "provider_name": p.get("provider_name"),
+                "distance": p.get("distance"),
+                "num_programs": len(p.get("programs", [])),
+                "first_program": (p.get("programs", [{}])[0].get("program_name")
+                                  if p.get("programs") else None),
+            })
+        st.json(preview)
+    
+def render_chat_tab(engine, model):
+    """Chat with the programs/providers database (providers + rolodex)."""
+    st.subheader("💬 Ask the Ecosystem")
+    st.caption("Ask natural-language questions like: "
+               "“Is there a service provider that can help with funding for my agrotech startup?”")
+
+    # Chat history
+    if "qa_msgs" not in st.session_state:
+        st.session_state.qa_msgs = [
+            {"role": "assistant",
+             "content": "Hi! Ask what you need (funding, prototyping, mentorship, specific verticals, etc.)."}
+        ]
+
+    # Render history
+    for m in st.session_state.qa_msgs:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    # Input
+    user_q = st.chat_input("Type your question")
+    if not user_q:
+        return
+
+    # Show user message
+    st.session_state.qa_msgs.append({"role": "user", "content": user_q})
+    with st.chat_message("user"):
+        st.markdown(user_q)
+
+    # Retrieve candidates from BOTH sources
+    hits = fn.nl_search_programs(engine, user_q, limit=20)
+
+    # Show retrieved rows for transparency
+    if not hits.empty:
+        with st.expander("Retrieved matches (top 20)"):
+            st.dataframe(
+                hits[["program_name","provider_name","services","verticals","product_type","county","website","source"]],
+                use_container_width=True
+            )
+
+    # Let the model compose the answer using only those rows
+    if hits.empty:
+        answer = "I couldn’t find anything relevant in the catalog. Try different words (e.g., 'grant', 'loan', 'agriculture')."
+    else:
+        answer = fn.answer_query_over_catalog(model, user_q, hits)
+
+    # Show assistant answer and store
+    st.session_state.qa_msgs.append({"role": "assistant", "content": answer})
+    with st.chat_message("assistant"):
+        st.markdown(answer)
+
 
 
 def main():
-    """Main application entry point"""
     st.title("SWPA Innovation Ecosystem")
-    
-    # Initialize resources
+
     engine = get_db_engine()
     model = get_llm_model()
-    
-    # Create tabs
-    about, overview, needs_section, programs, matching = st.tabs([
-        "About", "Rolodex Overview", "Needs", "Programs", "Matching tool"
-    ])
-    
-    # Render each tab
-    with about:
-        render_about_tab()
-    
-    with overview:
-        render_overview_tab(engine)
-    
-    with needs_section:
-        render_needs_tab(engine)
-    
-    with programs:
-        render_programs_tab(engine)
-    
-    with matching:
-        render_matching_tab(engine, model)
+
+    about, overview, needs, programs, matching, ask = st.tabs(
+        ["About", "Rolodex Overview", "Needs", "Programs", "Matching tool", "Ask the DB"]
+    )
+    with about:    render_about_tab()
+    with overview: render_overview_tab(engine)
+    with needs:    render_needs_tab(engine)
+    with programs: render_programs_tab(engine)
+    with matching: render_matching_tab(engine, model)
+    with ask: render_chat_tab(engine, model)
 
 if __name__ == "__main__":
     main()
