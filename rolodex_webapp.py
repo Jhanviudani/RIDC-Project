@@ -31,7 +31,9 @@ def get_llm_model():
 
 # ---------------- Tabs ----------------
 def render_about_tab(engine=None):
- 
+    import pandas as pd
+    import streamlit as st
+
     st.markdown("## 🌟 SWPA Innovation Ecosystem")
     st.caption("Discover programs, spaces, and support across Southwestern PA — built collaboratively with our community.")
 
@@ -74,21 +76,24 @@ def render_about_tab(engine=None):
             "2. **You search or ask** what you need (funding, labs, mentors, etc.).\n"
             "3. **We recommend** high-fit programs and explain why."
         )
+        st.markdown("### Privacy in brief")
+        st.markdown(
+            "- No public list of entrepreneurs\n"
+            "- Chat answers hide backend sources\n"
+            "- Data used only to improve recommendations"
+        )
 
     # --- Live metrics (optional if engine provided)
     if engine is not None:
         try:
             q_prov = "SELECT COUNT(DISTINCT provider_id) AS n FROM providers;"
             q_prog = "SELECT COUNT(*) AS n FROM programs;"
-            # Rolodex is optional; if missing, it will fail silently
-            try:
-                q_rolo = "SELECT COUNT(*) AS n FROM rolodex_points;"
-                rolo_n = int(pd.read_sql(q_rolo, engine).iloc[0]["n"])
-            except Exception:
-                rolo_n = None
-
             prov_n = int(pd.read_sql(q_prov, engine).iloc[0]["n"])
             prog_n = int(pd.read_sql(q_prog, engine).iloc[0]["n"])
+            try:
+                rolo_n = int(pd.read_sql("SELECT COUNT(*) AS n FROM rolodex_points;", engine).iloc[0]["n"])
+            except Exception:
+                rolo_n = None
 
             st.markdown("---")
             st.markdown("### Snapshot")
@@ -115,7 +120,6 @@ def render_about_tab(engine=None):
         submitted = st.form_submit_button("Send feedback")
         if submitted:
             if feedback_text.strip():
-                # Try to persist to Supabase/Postgres if a 'feedback' table exists
                 try:
                     df = pd.DataFrame([{
                         "page": "about",
@@ -131,13 +135,21 @@ def render_about_tab(engine=None):
             else:
                 st.warning("Please add a bit of feedback before submitting.")
 
-    # --- Tiny FAQ, super short
-    with st.expander("FAQ (short)"):
-        st.markdown(
-            "**Where does the data come from?** Provider intake forms + a curated Rolodex.\n\n"
-            "**Are recommendations private?** Yes — no public list of entrepreneurs, and we hide internal sources in the UI.\n\n"
-            "**How can I get my program listed?** Use the Provider Intake button above."
-        )
+    # --- FAQ (use HTML <details> to avoid Streamlit nested-expander error)
+    st.markdown(
+        """
+        <details style="margin-top: .75rem;">
+          <summary style="font-weight:600; cursor:pointer;">FAQ (short)</summary>
+          <div style="margin-top:.5rem">
+            <p><b>Where does the data come from?</b> Provider intake forms + a curated Rolodex.</p>
+            <p><b>Are recommendations private?</b> Yes — we don't list entrepreneurs publicly and we hide internal sources in the UI.</p>
+            <p><b>How can I get my program listed?</b> Use the Provider Intake button above.</p>
+          </div>
+        </details>
+        """,
+        unsafe_allow_html=True
+    )
+
 
 def render_overview_tab(engine):
     st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex")
