@@ -399,7 +399,7 @@ def render_matching_tab(engine, model):
     num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for b_idx, batch in _batches(full_payload, BATCH_SIZE):
-        st.write(f"Processing")
+        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
         batch_json = json.dumps(batch)
 
         # Call the LLM and parse JSON safely
