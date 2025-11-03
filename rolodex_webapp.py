@@ -30,19 +30,122 @@ def get_llm_model():
     )
 
 # ---------------- Tabs ----------------
-def render_about_tab():
-    st.subheader("About this app")
-    st.write(
-        """
-        This app maps SWPA’s innovation ecosystem, analyzes entrepreneur needs,
-        and recommends programs using data from **Providers** (intake form) and our own **internal database**.
+def render_about_tab(engine=None):
+    import pandas as pd
+    import streamlit as st
 
+    st.markdown("## 🌟 SWPA Innovation Ecosystem")
+    st.caption("Discover programs, spaces, and support across Southwestern PA — built collaboratively with our community.")
 
-        """
-    )
+    # --- Top CTA buttons
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        st.link_button("🚀 Entrepreneur Intake", "https://forms.gle/eMw5PY9QeTXDqPhy6")
+    with c2:
+        st.link_button("🧰 Provider Intake", "https://forms.gle/aae3SA6YJaZ7d1et5")
+    with c3:
+        st.markdown(
+            "<div style='padding:.6rem .8rem;border:1px solid #eee;border-radius:10px;'>"
+            "We’re building in public. <b>Your feedback directly shapes this product.</b>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+
     st.markdown("---")
-    st.write("🚀 Entrepreneurs --> Complete this form to get registered in the system and receive an initial list of resources as well as direct outreach from a representative to help you find resources. Alternatively, you can chat with the chatbot on the chat tab. \n [Entrepreneur Intake Form](https://forms.gle/eMw5PY9QeTXDqPhy6).")
-    st.write("🧰 Service providers --> Have a program to support entrepreneurs? Add it using this form. \n [Service Provider Intake Form](https://forms.gle/aae3SA6YJaZ7d1et5)")
+
+    # --- Quick who/what
+    colA, colB = st.columns(2)
+    with colA:
+        st.markdown("### Who is this for?")
+        st.markdown(
+            "- Entrepreneurs & small business owners\n"
+            "- Startup founders & students\n"
+            "- Ecosystem builders & service providers"
+        )
+        st.markdown("### What can you do here?")
+        st.markdown(
+            "- 🗺️ Explore the region’s innovation map\n"
+            "- 🔍 Browse & filter **programs** across Providers + Rolodex\n"
+            "- 🎯 Get **personalized recommendations** (private lookup)\n"
+            "- 💬 Ask the database questions in plain English"
+        )
+    with colB:
+        st.markdown("### How it works (30-second tour)")
+        st.markdown(
+            "1. **We unify data** from provider intake + curated Rolodex.\n"
+            "2. **You search or ask** what you need (funding, labs, mentors, etc.).\n"
+            "3. **We recommend** high-fit programs and explain why."
+        )
+        st.markdown("### Privacy in brief")
+        st.markdown(
+            "- No public list of entrepreneurs\n"
+            "- Chat answers hide backend sources\n"
+            "- Data used only to improve recommendations"
+        )
+
+    # --- Live metrics (optional if engine provided)
+    if engine is not None:
+        try:
+            q_prov = "SELECT COUNT(DISTINCT provider_id) AS n FROM providers;"
+            q_prog = "SELECT COUNT(*) AS n FROM programs;"
+            # Rolodex is optional; if missing, it will fail silently
+            try:
+                q_rolo = "SELECT COUNT(*) AS n FROM rolodex_points;"
+                rolo_n = int(pd.read_sql(q_rolo, engine).iloc[0]["n"])
+            except Exception:
+                rolo_n = None
+
+            prov_n = int(pd.read_sql(q_prov, engine).iloc[0]["n"])
+            prog_n = int(pd.read_sql(q_prog, engine).iloc[0]["n"])
+
+            st.markdown("---")
+            st.markdown("### Snapshot")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Providers", f"{prov_n:,}")
+            m2.metric("Programs (intake)", f"{prog_n:,}")
+            m3.metric("Rolodex points", f"{(rolo_n or 0):,}")
+        except Exception:
+            pass  # quietly skip metrics if anything fails
+
+    st.markdown("---")
+
+    # --- Feedback (simple form that tries to write to a 'feedback' table)
+    st.markdown("### We’d love your feedback")
+    with st.form("about_feedback"):
+        fb_col1, fb_col2 = st.columns([2, 1])
+        with fb_col1:
+            feedback_text = st.text_area(
+                "What’s working? What’s missing? Any bugs or ideas?",
+                placeholder="Share a quick note…"
+            )
+        with fb_col2:
+            contact_email = st.text_input("Email (optional)")
+        submitted = st.form_submit_button("Send feedback")
+        if submitted:
+            if feedback_text.strip():
+                # Try to persist to Supabase/Postgres if a 'feedback' table exists
+                try:
+                    df = pd.DataFrame([{
+                        "page": "about",
+                        "feedback_text": feedback_text.strip(),
+                        "contact_email": (contact_email or "").strip()
+                    }])
+                    import functions as fn
+                    fn.insert_data_to_supabase(df, "feedback")
+                    st.success("Thanks! Your feedback has been recorded. 🙌")
+                except Exception:
+                    st.info("Thanks! If this didn’t save, please use this form instead:")
+                    st.link_button("Open feedback form", "https://forms.gle/eMw5PY9QeTXDqPhy6")
+            else:
+                st.warning("Please add a bit of feedback before submitting.")
+
+    # --- Tiny FAQ, super short
+    with st.expander("FAQ (short)"):
+        st.markdown(
+            "**Where does the data come from?** Provider intake forms + a curated Rolodex.\n\n"
+            "**Are recommendations private?** Yes — no public list of entrepreneurs, and we hide internal sources in the UI.\n\n"
+            "**How can I get my program listed?** Use the Provider Intake button above."
+        )
 
 def render_overview_tab(engine):
     st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex")
