@@ -273,14 +273,17 @@ def render_programs_tab(engine):
     st.markdown(f"**{len(f)}** program(s) match the selected filters.")
     st.dataframe(f, use_container_width=True)
 
+
+
 def render_matching_tab(engine, model):
-    """Renders the Matching tool tab (Providers + Rolodex) with robust JSON parsing."""
-    import pandas as pd
+    """Renders the Matching tool tab (Providers + Rolodex) with robust JSON parsing and privacy-friendly selection."""
     import json
+    import pandas as pd
+    import difflib, re
 
-    st.subheader("🎯 Program Recommendations (Providers + Rolodex)")
+    st.subheader("🎯 Program Recommendations ")
 
-    # --------- Load entrepreneurs + needs (unchanged) ----------
+    # --------- Load entrepreneurs + needs ----------
     q_ent = """
       SELECT DISTINCT ON (entrepreneur_id)
              entrepreneur_id, name, business_name, email, phone, address, zipcode,
@@ -296,22 +299,66 @@ def render_matching_tab(engine, model):
     """
     df_entrep = fn.get_data(q_ent, engine)
     df_needs  = fn.get_data(q_needs, engine)
-    json_entrep = fn.df_to_json_nest(df_entrep, df_needs,
-                                     join_key="entrepreneur_id",
-                                     child_key="needs_needed")
 
     if df_entrep.empty:
         st.info("No entrepreneurs found yet.")
         return
 
-    # Select one entrepreneur
-    business_names = df_entrep["business_name"].dropna().unique().tolist()
-    selected_business = st.selectbox("Select an Entrepreneur", business_names)
-    sel = [e for e in json_entrep if e.get("business_name") == selected_business]
-    if not sel:
-        st.warning("Entrepreneur record not found.")
+    # --------- Privacy-friendly entrepreneur selection (no public dropdown) ----------
+    typed_name = st.text_input(
+        "Enter the name you used on the form",
+        value="",
+        help="We’ll look up your record privately. Try the same spacing/punctuation."
+    ).strip()
+
+    if not typed_name:
+        st.info("Enter your name to load your profile and needs.")
         return
-    entrepreneur = sel[0]
+
+    # 1) Exact, case-insensitive match on either 'name' or 'business_name'
+    exact = df_entrep[
+        (df_entrep["name"].fillna("").str.casefold() == typed_name.casefold()) |
+        (df_entrep["business_name"].fillna("").str.casefold() == typed_name.casefold())
+    ]
+    candidates = exact
+
+    # 2) If no exact match, try "contains" (still case-insensitive)
+    if candidates.empty:
+        patt = re.escape(typed_name)
+        contains = df_entrep[
+            df_entrep["name"].fillna("").str.contains(patt, case=False) |
+            df_entrep["business_name"].fillna("").str.contains(patt, case=False)
+        ]
+        candidates = contains
+
+    # 3) If still nothing, use a simple fuzzy top-1 against concatenated name fields
+    if candidates.empty:
+        keys = (df_entrep["name"].fillna("") + " | " + df_entrep["business_name"].fillna("")).tolist()
+        best = difflib.get_close_matches(typed_name, keys, n=1, cutoff=0.8)
+        if best:
+            ix = keys.index(best[0])
+            candidates = df_entrep.iloc[[ix]]
+
+    if candidates.empty:
+        st.warning("We couldn’t find a record with that name. Please check the spelling or try a different variation.")
+        return
+
+    # Prefer exact-match rows first, if multiple
+    if len(candidates) > 1:
+        exact_rows = candidates[
+            (candidates["name"].fillna("").str.casefold() == typed_name.casefold()) |
+            (candidates["business_name"].fillna("").str.casefold() == typed_name.casefold())
+        ]
+        if not exact_rows.empty:
+            candidates = exact_rows
+
+    # Final pick
+    row = candidates.iloc[0]
+    eid = row["entrepreneur_id"]
+    needs_for_e = df_needs[df_needs["entrepreneur_id"] == eid][["service", "need"]]
+
+    entrepreneur = row.to_dict()
+    entrepreneur["needs_needed"] = needs_for_e.to_dict(orient="records")
 
     # --------- Build combined provider payload (providers + rolodex) ----------
     try:
@@ -412,6 +459,9 @@ def render_matching_tab(engine, model):
 
     # --------- Table ----------
     matches_df = pd.DataFrame(deduped).sort_values("final_score", ascending=False)
+    # Hide backend source column, if present
+    matches_df = matches_df.drop(columns=["source"], errors="ignore")
+
     st.subheader(f"Structured Recommendations · {len(matches_df)} unique results")
     st.dataframe(matches_df, use_container_width=True)
 
@@ -429,7 +479,6 @@ def render_matching_tab(engine, model):
         preview = []
         for p in full_payload[:3]:
             preview.append({
-                
                 "provider_name": p.get("provider_name"),
                 "distance": p.get("distance"),
                 "num_programs": len(p.get("programs", [])),
@@ -437,7 +486,8 @@ def render_matching_tab(engine, model):
                                   if p.get("programs") else None),
             })
         st.json(preview)
-    
+
+
 def render_chat_tab(engine, model):
     """Chat with the programs/providers database ."""
     st.subheader("💬 Ask the Ecosystem")
