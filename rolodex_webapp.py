@@ -276,7 +276,7 @@ def render_programs_tab(engine):
 
 
 def render_matching_tab(engine, model):
-    """Renders the Matching tool tab (Providers + Rolodex) with robust JSON parsing and privacy-friendly selection."""
+    """Renders the Matching tool tab with robust JSON parsing and privacy-friendly selection."""
     import json
     import pandas as pd
     import difflib, re
