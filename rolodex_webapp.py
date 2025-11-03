@@ -569,18 +569,33 @@ def render_chat_tab(engine, model):
 def main():
     st.title("SWPA Innovation Ecosystem")
 
+    # Reuse the cached resources
     engine = get_db_engine()
     model = get_llm_model()
 
-    about, overview, needs, programs, matching, ask = st.tabs(
-        ["About", "Rolodex Overview", "Needs", "Programs", "Matching tool", "Ask the DB"]
-    )
-    with about:    render_about_tab()
-    with overview: render_overview_tab(engine)
-    with needs:    render_needs_tab(engine)
-    with programs: render_programs_tab(engine)
-    with matching: render_matching_tab(engine, model)
-    with ask: render_chat_tab(engine, model)
+    # Optional quick toggles
+    st.caption("Open the sections you want below. No tabs — everything on one page.")
+    show_all = st.checkbox("Open all sections", value=False)
+
+    # Each section is an expander; turn any on/off as you like
+    with st.expander("ℹ️ About", expanded=show_all):
+        render_about_tab()
+
+    with st.expander("🗺️ Rolodex Overview (Map)", expanded=show_all):
+        render_overview_tab(engine)
+
+    with st.expander("📊 Needs", expanded=show_all):
+        render_needs_tab(engine)
+
+    with st.expander("🔍 Programs (Providers + Rolodex)", expanded=show_all):
+        render_programs_tab(engine)
+
+    with st.expander("🎯 Matching Tool (Personalized Recommendations)", expanded=show_all):
+        render_matching_tab(engine, model)
+
+    with st.expander("💬 Ask the DB (Chat)", expanded=show_all):
+        render_chat_tab(engine, model)
+
 
 if __name__ == "__main__":
     main()
