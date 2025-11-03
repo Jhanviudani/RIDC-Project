@@ -426,7 +426,7 @@ Task:
 3) Return ONLY a JSON array of objects with these keys:
    ["provider_name","program_name","need_satisfied","distance_score","identity_score","service_score","need_satisfaction_score","source"]
    - Scores: 0–10
-   - 'source' should be 'providers' or 'rolodex' (pass through from input if available).
+ 
 """
     resp = model.invoke(prompt)
     return resp.content if hasattr(resp, "content") else str(resp)
@@ -600,7 +600,7 @@ def build_program_catalog(engine) -> pd.DataFrame:
       - providers/programs (form intake)
       - rolodex_points (sheet)
     Columns: provider_name, program_name, services, verticals, product_type,
-             county, address, website, scraped_description, source, provider_id, program_id
+             county, address, website, scraped_description, provider_id, program_id
     """
     # A) FORM PROGRAMS
     q_form = """
