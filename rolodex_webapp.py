@@ -35,12 +35,14 @@ def render_about_tab():
     st.write(
         """
         This app maps SWPA’s innovation ecosystem, analyzes entrepreneur needs,
-        and recommends programs using data from **Providers** (intake form) and the **Rolodex**.
+        and recommends programs using data from **Providers** (intake form) and our own **internal database**.
+
+
         """
     )
     st.markdown("---")
-    st.write("🚀 Entrepreneurs: [Intake Form](https://forms.gle/eMw5PY9QeTXDqPhy6)")
-    st.write("🧰 Service Providers: [Intake Form](https://forms.gle/aae3SA6YJaZ7d1et5)")
+    st.write("🚀 Entrepreneurs --> Complete this form to get registered in the system and receive an initial list of resources as well as direct outreach from a representative to help you find resources. Alternatively, you can chat with the chatbot on the chat tab. \n [Intake Form](https://forms.gle/eMw5PY9QeTXDqPhy6).")
+    st.write("🧰 Service providers --> Have a program to support entrepreneurs? Add it using this form. \n [Intake Form](https://forms.gle/aae3SA6YJaZ7d1et5)")
 
 def render_overview_tab(engine):
     st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex")
@@ -397,7 +399,7 @@ def render_matching_tab(engine, model):
     num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for b_idx, batch in _batches(full_payload, BATCH_SIZE):
-        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
+        st.write(f"Processing")
         batch_json = json.dumps(batch)
 
         # Call the LLM and parse JSON safely
