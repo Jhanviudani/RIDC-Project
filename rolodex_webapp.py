@@ -31,9 +31,7 @@ def get_llm_model():
 
 # ---------------- Tabs ----------------
 def render_about_tab(engine=None):
-    import pandas as pd
-    import streamlit as st
-
+ 
     st.markdown("## 🌟 SWPA Innovation Ecosystem")
     st.caption("Discover programs, spaces, and support across Southwestern PA — built collaboratively with our community.")
 
@@ -75,12 +73,6 @@ def render_about_tab(engine=None):
             "1. **We unify data** from provider intake + curated Rolodex.\n"
             "2. **You search or ask** what you need (funding, labs, mentors, etc.).\n"
             "3. **We recommend** high-fit programs and explain why."
-        )
-        st.markdown("### Privacy in brief")
-        st.markdown(
-            "- No public list of entrepreneurs\n"
-            "- Chat answers hide backend sources\n"
-            "- Data used only to improve recommendations"
         )
 
     # --- Live metrics (optional if engine provided)
