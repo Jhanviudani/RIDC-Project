@@ -403,7 +403,7 @@ def render_matching_tab(engine, model):
     except Exception:
         st.write("Summary unavailable.")
 
-    st.subheader("Program Recommendations (merged across batches)")
+    st.subheader("Program Recommendations")
     try:
         rec_summary = fn.summarize_recommendations(entrepreneur, deduped, model)
         st.write(rec_summary)
@@ -429,7 +429,7 @@ def render_matching_tab(engine, model):
         preview = []
         for p in full_payload[:3]:
             preview.append({
-                "source": p.get("source"),
+                
                 "provider_name": p.get("provider_name"),
                 "distance": p.get("distance"),
                 "num_programs": len(p.get("programs", [])),
@@ -439,7 +439,7 @@ def render_matching_tab(engine, model):
         st.json(preview)
     
 def render_chat_tab(engine, model):
-    """Chat with the programs/providers database (providers + rolodex)."""
+    """Chat with the programs/providers database ."""
     st.subheader("💬 Ask the Ecosystem")
     st.caption("Ask natural-language questions like: "
                "“Is there a service provider that can help with funding for my agrotech startup?”")
@@ -473,7 +473,7 @@ def render_chat_tab(engine, model):
     if not hits.empty:
         with st.expander("Retrieved matches (top 20)"):
             st.dataframe(
-                hits[["program_name","provider_name","services","verticals","product_type","county","website","source"]],
+                hits[["program_name","provider_name","services","verticals","product_type","county","website"]],
                 use_container_width=True
             )
 
