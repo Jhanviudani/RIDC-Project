@@ -276,7 +276,7 @@ def render_programs_tab(engine):
 
 
 def render_matching_tab(engine, model):
-    """Renders the Matching tool tab with robust JSON parsing and privacy-friendly selection."""
+    """Renders the Matching tool tab (Providers + Rolodex) with robust JSON parsing and privacy-friendly selection."""
     import json
     import pandas as pd
     import difflib, re
@@ -378,7 +378,8 @@ def render_matching_tab(engine, model):
 
     total_form  = sum(1 for p in full_payload if p.get("source") == "providers")
     total_rolo  = sum(1 for p in full_payload if p.get("source") == "rolodex")
-    st.caption(f"Evaluating providers ")
+    st.caption(f"Evaluating {len(full_payload)} providers "
+               f"({total_form} from form intake / {total_rolo} from rolodex).")
 
     # Helper to chunk the payload so we don't overflow the model context
     def _batches(items, size):
@@ -396,7 +397,7 @@ def render_matching_tab(engine, model):
     num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for b_idx, batch in _batches(full_payload, BATCH_SIZE):
-        
+        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
         batch_json = json.dumps(batch)
 
         # Call the LLM and parse JSON safely
@@ -458,11 +459,34 @@ def render_matching_tab(engine, model):
 
     # --------- Table ----------
     matches_df = pd.DataFrame(deduped).sort_values("final_score", ascending=False)
-    # Hide backend source column, if present
-    matches_df = matches_df.drop(columns=["source"], errors="ignore")
 
+    # Remove debug/batch columns, backend source, and reorder for clarity
+    matches_df = matches_df.drop(columns=["batch_index", "source"], errors="ignore")
+
+    # If 'website' not already present, fill from payload (match by provider_id/program_name)
+    if "website" not in matches_df.columns:
+        matches_df["website"] = None
+    for i, row_ in matches_df.iterrows():
+        if not row_.get("website"):
+            pid = str(row_.get("provider_id"))
+            pname = str(row_.get("program_name", "")).lower()
+            for prov in full_payload:
+                if str(prov.get("provider_id")) == pid:
+                    for prog in prov.get("programs", []):
+                        if pname == str(prog.get("program_name", "")).lower():
+                            matches_df.at[i, "website"] = prog.get("website")
+                            break
+
+    # Display
     st.subheader(f"Structured Recommendations · {len(matches_df)} unique results")
-    st.dataframe(matches_df, use_container_width=True)
+    st.dataframe(
+        matches_df[
+            ["program_name", "provider_name", "website", "final_score",
+             "distance_score", "identity_score", "service_score", "need_satisfaction_score",
+             "need_satisfied", "explanation"]
+        ].dropna(axis=1, how="all", errors="ignore"),
+        use_container_width=True
+    )
 
     # Optional export to DB
     if st.button("Send Results to Database"):
@@ -473,7 +497,19 @@ def render_matching_tab(engine, model):
         except Exception as e:
             st.error(f"Failed to save: {e}")
 
-    
+    # Debug preview of payload actually used
+    with st.expander("Preview: first 3 providers from the full payload"):
+        preview = []
+        for p in full_payload[:3]:
+            preview.append({
+                "provider_name": p.get("provider_name"),
+                "distance": p.get("distance"),
+                "num_programs": len(p.get("programs", [])),
+                "first_program": (p.get("programs", [{}])[0].get("program_name")
+                                  if p.get("programs") else None),
+            })
+        st.json(preview)
+
 
 
 
