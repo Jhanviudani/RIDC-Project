@@ -750,7 +750,7 @@ def answer_query_over_catalog(model, user_query: str, records_df: pd.DataFrame) 
             "Records (JSON list of programs/providers):\n"
             f"{json.dumps(records, ensure_ascii=False)}\n\n"
             "Produce a short answer followed by a bullet list of 5–10 top matches. "
-            "For each bullet include: program_name — provider_name — why it fits — county — website — source "
+            "For each bullet include bulletpoints: program_name — provider_name — why it fits — county — website"
             "(providers|rolodex). If nothing fits, say so clearly."
         ))
     ]
