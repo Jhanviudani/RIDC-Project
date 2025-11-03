@@ -41,8 +41,8 @@ def render_about_tab():
         """
     )
     st.markdown("---")
-    st.write("🚀 Entrepreneurs --> Complete this form to get registered in the system and receive an initial list of resources as well as direct outreach from a representative to help you find resources. Alternatively, you can chat with the chatbot on the chat tab. \n [Intake Form](https://forms.gle/eMw5PY9QeTXDqPhy6).")
-    st.write("🧰 Service providers --> Have a program to support entrepreneurs? Add it using this form. \n [Intake Form](https://forms.gle/aae3SA6YJaZ7d1et5)")
+    st.write("🚀 Entrepreneurs --> Complete this form to get registered in the system and receive an initial list of resources as well as direct outreach from a representative to help you find resources. Alternatively, you can chat with the chatbot on the chat tab. \n [Entrepreneur Intake Form](https://forms.gle/eMw5PY9QeTXDqPhy6).")
+    st.write("🧰 Service providers --> Have a program to support entrepreneurs? Add it using this form. \n [Service Provider Intake Form](https://forms.gle/aae3SA6YJaZ7d1et5)")
 
 def render_overview_tab(engine):
     st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex")
