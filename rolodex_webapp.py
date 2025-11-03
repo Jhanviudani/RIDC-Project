@@ -380,8 +380,7 @@ def render_matching_tab(engine, model):
 
     total_form  = sum(1 for p in full_payload if p.get("source") == "providers")
     total_rolo  = sum(1 for p in full_payload if p.get("source") == "rolodex")
-    st.caption(f"Evaluating {len(full_payload)} providers "
-               f"({total_form} from form intake / {total_rolo} from rolodex).")
+    st.caption(f"Evaluating providers ")
 
     # Helper to chunk the payload so we don't overflow the model context
     def _batches(items, size):
@@ -399,7 +398,7 @@ def render_matching_tab(engine, model):
     num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for b_idx, batch in _batches(full_payload, BATCH_SIZE):
-        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
+        st.write(f"Processing")
         batch_json = json.dumps(batch)
 
         # Call the LLM and parse JSON safely
