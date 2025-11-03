@@ -378,8 +378,7 @@ def render_matching_tab(engine, model):
 
     total_form  = sum(1 for p in full_payload if p.get("source") == "providers")
     total_rolo  = sum(1 for p in full_payload if p.get("source") == "rolodex")
-    st.caption(f"Evaluating {len(full_payload)} providers "
-               f"({total_form} from form intake / {total_rolo} from rolodex).")
+    st.caption(f"Evaluating providers ")
 
     # Helper to chunk the payload so we don't overflow the model context
     def _batches(items, size):
@@ -397,7 +396,7 @@ def render_matching_tab(engine, model):
     num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for b_idx, batch in _batches(full_payload, BATCH_SIZE):
-        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
+        
         batch_json = json.dumps(batch)
 
         # Call the LLM and parse JSON safely
@@ -474,18 +473,8 @@ def render_matching_tab(engine, model):
         except Exception as e:
             st.error(f"Failed to save: {e}")
 
-    # Debug preview of payload actually used
-    with st.expander("Preview: first 3 providers from the full payload"):
-        preview = []
-        for p in full_payload[:3]:
-            preview.append({
-                "provider_name": p.get("provider_name"),
-                "distance": p.get("distance"),
-                "num_programs": len(p.get("programs", [])),
-                "first_program": (p.get("programs", [{}])[0].get("program_name")
-                                  if p.get("programs") else None),
-            })
-        st.json(preview)
+    
+
 
 
 def render_chat_tab(engine, model):
