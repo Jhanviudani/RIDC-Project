@@ -587,7 +587,7 @@ def main():
     with st.expander("📊 Needs", expanded=show_all):
         render_needs_tab(engine)
 
-    with st.expander("🔍 Programs (Providers + Rolodex)", expanded=show_all):
+    with st.expander("🔍 Programs", expanded=show_all):
         render_programs_tab(engine)
 
     with st.expander("🎯 Matching Tool (Personalized Recommendations)", expanded=show_all):
