@@ -141,28 +141,34 @@ def render_about_tab(engine=None):
 
 # ---------------- Rolodex Overview (map) ----------------
 def render_overview_tab(engine):
-    st.subheader("📍 Map: Rolodex External")
+    """Displays an interactive map of all organizations and programs from rolodex_external."""
+    st.subheader("📍 Rolodex External Map")
 
     q_rolo = """
     SELECT
-      org_name   AS name,
+      org_name AS name,
+      program_name,
       COALESCE(address,'') AS address,
       COALESCE(county_hq,'') AS county,
-      latitude, longitude
+      COALESCE(latitude,0) AS latitude,
+      COALESCE(longitude,0) AS longitude,
+      COALESCE(primary_service,'') AS service
     FROM rolodex_external;
     """
     try:
-        df_rolo = fn.get_data(q_rolo, engine).dropna(subset=["latitude", "longitude"])
+        df = fn.get_data(q_rolo, engine)
+        df = df.dropna(subset=["latitude", "longitude"])
     except Exception:
-        df_rolo = pd.DataFrame(columns=["name", "address", "county", "latitude", "longitude"])
+        df = pd.DataFrame(columns=["name", "program_name", "address", "county", "latitude", "longitude", "service"])
 
-    if df_rolo.empty:
-        st.info("No map points to show yet.")
+    if df.empty:
+        st.info("No Rolodex External data found.")
         return
 
-    df_rolo["color"] = [fn.hex_to_rgb("#FFA500")] * len(df_rolo)
+    # Assign color
+    df["color"] = [fn.hex_to_rgb("#FFA500")] * len(df)
 
-    # SWPA counties outline
+    # Create GeoJson outline for SWPA
     geojson_url = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
     try:
         us_counties = requests.get(geojson_url, timeout=10).json()
@@ -174,6 +180,7 @@ def render_overview_tab(engine):
         "features": [f for f in us_counties.get("features", []) if f.get("id") in swpa_fips],
     }
 
+    # Define pydeck layers
     layers = [
         pdk.Layer(
             "GeoJsonLayer",
@@ -181,13 +188,13 @@ def render_overview_tab(engine):
             opacity=0.2,
             stroked=True,
             filled=True,
-            get_fill_color=[200, 200, 200],
-            get_line_color=[0, 0, 0],
+            get_fill_color=[220, 220, 220],
+            get_line_color=[80, 80, 80],
             get_line_width=2,
         ),
         pdk.Layer(
             "ScatterplotLayer",
-            data=df_rolo,
+            data=df,
             get_position=["longitude", "latitude"],
             get_color="color",
             get_radius=1000,
@@ -197,26 +204,49 @@ def render_overview_tab(engine):
         ),
     ]
 
+    # Map view
     view_state = pdk.ViewState(
-        latitude=df_rolo["latitude"].mean(),
-        longitude=df_rolo["longitude"].mean(),
+        latitude=df["latitude"].mean(),
+        longitude=df["longitude"].mean(),
         zoom=8,
     )
 
+    # Display map
     st.pydeck_chart(
         pdk.Deck(
             map_style="mapbox://styles/mapbox/light-v9",
             initial_view_state=view_state,
             layers=layers,
-            tooltip={"html": "<b>{name}</b><br/>{county}<br/>{address}"},
+            tooltip={
+                "html": (
+                    "<b>{name}</b><br/>"
+                    "Program: {program_name}<br/>"
+                    "Service: {service}<br/>"
+                    "County: {county}<br/>"
+                    "{address}"
+                ),
+                "style": {"backgroundColor": "white", "color": "black"}
+            },
         )
     )
 
-    st.markdown(f"**Rolodex External points:** {len(df_rolo)}")
+    # Stats summary
+    st.markdown("---")
+    st.markdown(f"""
+    **Rolodex External Overview**
+    - Total entries: {len(df)}
+    - Unique organizations: {df['name'].nunique()}
+    - Unique programs: {df['program_name'].nunique()}
+    - Counties represented: {df['county'].nunique()}
+    """)
+
+    
+
+    
 
 # ---------------- Needs (ROL0DEX_EXTERNAL ONLY) ----------------
 def render_needs_tab(engine):
-    st.subheader("📊 Services by County (from Rolodex External)")
+    st.subheader("📊 Search Based on Needs and Services")
     q = """
     SELECT
       COALESCE(county_hq,'') AS county,
@@ -241,7 +271,7 @@ def render_needs_tab(engine):
 
 # ---------------- Programs (ROL0DEX_EXTERNAL ONLY) ----------------
 def render_programs_tab(engine):
-    st.subheader("🔍📄 Programs (from Rolodex External)")
+    st.subheader("🔍📄 Search Based on Service Providers and Programs")
     q = """
     SELECT
       org_name AS provider_name,
@@ -493,42 +523,52 @@ def render_chat_tab(engine, model):
     st.subheader("💬 Ask the Ecosystem")
     st.caption("Ask questions like: “Is there a provider that can help with grants for a manufacturing startup?”")
 
+    # Initialize chat history
     if "qa_msgs" not in st.session_state:
         st.session_state.qa_msgs = [
             {"role": "assistant",
              "content": "Hi! Ask what you need (funding, prototyping, mentorship, specific verticals, etc.)."}
         ]
 
+    # Display previous messages
     for m in st.session_state.qa_msgs:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
+    # Input box for user query
     user_q = st.chat_input("Type your question")
     if not user_q:
         return
 
+    # Append user message
     st.session_state.qa_msgs.append({"role": "user", "content": user_q})
     with st.chat_message("user"):
         st.markdown(user_q)
 
-    # This relies on fn.nl_search_programs() which should already be rolodex_external-only
+    # Search rolodex_external
     hits = fn.nl_search_programs(engine, user_q, limit=20)
 
-    if not hits.empty:
-        st.markdown("**Search Results**")
-        st.dataframe(
-            hits[["program_name","provider_name","services","verticals","product_type","county","website"]],
-            use_container_width=True
-    )
-
+    # Generate model's answer (text first)
     if hits.empty:
         answer = "I couldn’t find anything relevant in the catalog. Try different words (e.g., 'grant', 'loan', 'agriculture')."
     else:
         answer = fn.answer_query_over_catalog(model, user_q, hits)
 
+    # Display AI answer first
     st.session_state.qa_msgs.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(answer)
+
+        # Then show table after text
+        if not hits.empty:
+            st.markdown("---")
+            st.markdown("**Top Matches from Rolodex External (table view)**")
+            st.dataframe(
+                hits[["program_name", "provider_name", "services", "verticals",
+                      "product_type", "county", "website"]],
+                use_container_width=True
+            )
+
 
 # ---------------- Main ----------------
 def main():
