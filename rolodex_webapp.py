@@ -40,9 +40,9 @@ def render_about_tab(engine=None):
     # --- Top CTA buttons
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
-        st.link_button("🚀 Entrepreneur Intake", "https://forms.gle/eMw5PY9QeTXDqPhy6")
+        st.link_button("🚀 Entrepreneur Needs Survey -- Complete this form to get personalized recommendations or request a call.", "https://forms.gle/eMw5PY9QeTXDqPhy6")
     with c2:
-        st.link_button("🧰 Provider Intake", "https://forms.gle/aae3SA6YJaZ7d1et5")
+        st.link_button("🧰 Service Provider Program Registration Form -- Have a program to support entrepreneurs? Add it using this form. ", "https://forms.gle/aae3SA6YJaZ7d1et5")
     with c3:
         st.markdown(
             "<div style='padding:.6rem .8rem;border:1px solid #eee;border-radius:10px;'>"
@@ -280,7 +280,7 @@ def render_overview_tab(engine):
     )
 
 def render_needs_tab(engine):
-    st.subheader("📊 Entrepreneur Needs")
+    st.subheader("📊 Search Based on Needs and Services")
     q_needs = """
     SELECT en.entrepreneur_id, e.county, en.need, en.service
     FROM entrepreneur_needs en
@@ -304,7 +304,7 @@ def render_needs_tab(engine):
     st.plotly_chart(fig)
 
 def render_programs_tab(engine):
-    st.subheader("🔍📄 Programs (Providers + Rolodex)")
+    st.subheader("🔍📄 Search Based on Service Providers and Programs")
 
     # A) Provider programs
     q_form = """
@@ -605,25 +605,13 @@ def render_matching_tab(engine, model):
         except Exception as e:
             st.error(f"Failed to save: {e}")
 
-    # Debug preview of payload actually used
-    with st.expander("Preview: first 3 providers from the full payload"):
-        preview = []
-        for p in full_payload[:3]:
-            preview.append({
-                "provider_name": p.get("provider_name"),
-                "distance": p.get("distance"),
-                "num_programs": len(p.get("programs", [])),
-                "first_program": (p.get("programs", [{}])[0].get("program_name")
-                                  if p.get("programs") else None),
-            })
-        st.json(preview)
 
 
 
 
 def render_chat_tab(engine, model):
     """Chat with the programs/providers database ."""
-    st.subheader("💬 Ask the Ecosystem")
+    st.subheader("💬 Chat with the Database ")
     st.caption("Ask natural-language questions like: "
                "“Is there a service provider that can help with funding for my agrotech startup?”")
 
@@ -691,16 +679,16 @@ def main():
     with st.expander("🗺️ Rolodex Overview (Map)", expanded=show_all):
         render_overview_tab(engine)
 
-    with st.expander("📊 Needs", expanded=show_all):
+    with st.expander("📊 Search Based on Needs and Services", expanded=show_all):
         render_needs_tab(engine)
 
-    with st.expander("🔍 Programs", expanded=show_all):
+    with st.expander("🔍 Search Based on Service Providers and Programs", expanded=show_all):
         render_programs_tab(engine)
 
     with st.expander("🎯 Matching Tool (Personalized Recommendations)", expanded=show_all):
         render_matching_tab(engine, model)
 
-    with st.expander("💬 Ask the DB (Chat)", expanded=show_all):
+    with st.expander("💬 Chat with the Database", expanded=show_all):
         render_chat_tab(engine, model)
 
 
