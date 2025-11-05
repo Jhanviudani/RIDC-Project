@@ -141,48 +141,81 @@ def render_about_tab(engine=None):
 
 # ---------------- Rolodex Overview (map) ----------------
 def render_overview_tab(engine):
-    """Displays an interactive map of all organizations and programs from rolodex_external."""
-    st.subheader("📍 Rolodex External Map")
+    """Displays an interactive map from rolodex_external using 'Latitude Coordinates' & 'Longitude Coordinates'."""
+    import pandas as pd
+    import requests
+    import pydeck as pdk
+    import streamlit as st
+    import functions as fn
 
-    q_rolo = """
+    st.subheader("📍 Map of Service Providers and Programs")
+
+    # Pull only what we need from rolodex_external
+    q = """
     SELECT
       org_name AS name,
       program_name,
       COALESCE(address,'') AS address,
       COALESCE(county_hq,'') AS county,
-      COALESCE(latitude,0) AS latitude,
-      COALESCE(longitude,0) AS longitude,
-      COALESCE(primary_service,'') AS service
+      COALESCE(primary_service,'') AS service,
+      "Latitude Coordinates"   AS lat_raw,
+      "Longitude Coordinates"  AS lon_raw
     FROM rolodex_external;
     """
     try:
-        df = fn.get_data(q_rolo, engine)
-        df = df.dropna(subset=["latitude", "longitude"])
+        df = fn.get_data(q, engine)
     except Exception:
-        df = pd.DataFrame(columns=["name", "program_name", "address", "county", "latitude", "longitude", "service"])
+        df = pd.DataFrame(columns=["name","program_name","address","county","service","lat_raw","lon_raw"])
+
+    # Coerce lat/lon from the sheet columns
+    def _to_float(v):
+        try:
+            if v is None: return None
+            s = str(v).strip().replace(",", "")
+            if s == "" or s.lower() in {"nan", "none"}: return None
+            return float(s)
+        except Exception:
+            return None
+
+    df["latitude"]  = df["lat_raw"].apply(_to_float)
+    df["longitude"] = df["lon_raw"].apply(_to_float)
+
+    # Filter valid coordinates
+    df = df.dropna(subset=["latitude","longitude"]).copy()
+    df = df[(df["latitude"].between(-90, 90)) & (df["longitude"].between(-180, 180))]
 
     if df.empty:
-        st.info("No Rolodex External data found.")
+        st.info("No valid coordinates found in rolodex_external. Check the 'Latitude Coordinates' / 'Longitude Coordinates' values.")
         return
 
-    # Assign color
-    df["color"] = [fn.hex_to_rgb("#FFA500")] * len(df)
+    # Simple filters (no expanders to avoid nesting issues)
+    col1, col2 = st.columns(2)
+    with col1:
+        sel_county = st.selectbox("Filter by County", ["All"] + sorted(df["county"].dropna().unique().tolist()))
+    with col2:
+        sel_service = st.selectbox("Filter by Primary Service", ["All"] + sorted(df["service"].dropna().unique().tolist()))
 
-    # Create GeoJson outline for SWPA
+    f = df
+    if sel_county != "All":
+        f = f[f["county"] == sel_county]
+    if sel_service != "All":
+        f = f[f["service"] == sel_service]
+
+    if f.empty:
+        st.warning("No results for the selected filters.")
+        return
+
+    # One color for all rolodex points (orange) — or derive by service if you want
+    f["color"] = [fn.hex_to_rgb("#FFA500")] * len(f)
+
+    # Optional SWPA county outline for context (kept from your older map)
     geojson_url = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
     try:
         us_counties = requests.get(geojson_url, timeout=10).json()
-    except Exception:
-        us_counties = {"type": "FeatureCollection", "features": []}
-    swpa_fips = ["42003", "42005", "42007", "42019", "42051", "42059", "42063", "42073", "42125", "42129"]
-    swpa_geo = {
-        "type": "FeatureCollection",
-        "features": [f for f in us_counties.get("features", []) if f.get("id") in swpa_fips],
-    }
-
-    # Define pydeck layers
-    layers = [
-        pdk.Layer(
+        swpa_fips = ["42003","42005","42007","42019","42051","42059","42063","42073","42125","42129"]
+        swpa_geo = {"type": "FeatureCollection",
+                    "features": [g for g in us_counties.get("features", []) if g.get("id") in swpa_fips]}
+        outline_layer = pdk.Layer(
             "GeoJsonLayer",
             data=swpa_geo,
             opacity=0.2,
@@ -191,27 +224,31 @@ def render_overview_tab(engine):
             get_fill_color=[220, 220, 220],
             get_line_color=[80, 80, 80],
             get_line_width=2,
-        ),
-        pdk.Layer(
-            "ScatterplotLayer",
-            data=df,
-            get_position=["longitude", "latitude"],
-            get_color="color",
-            get_radius=1000,
-            pickable=True,
-            radius_min_pixels=5,
-            radius_max_pixels=15,
-        ),
-    ]
+        )
+        layers = [outline_layer]
+    except Exception:
+        layers = []
 
-    # Map view
+    # Points layer
+    points_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=f,
+        get_position=["longitude", "latitude"],
+        get_color="color",
+        get_radius=900,
+        pickable=True,
+        radius_min_pixels=4,
+        radius_max_pixels=12,
+    )
+    layers.append(points_layer)
+
+    # Center view
     view_state = pdk.ViewState(
-        latitude=df["latitude"].mean(),
-        longitude=df["longitude"].mean(),
+        latitude=float(f["latitude"].mean()),
+        longitude=float(f["longitude"].mean()),
         zoom=8,
     )
 
-    # Display map
     st.pydeck_chart(
         pdk.Deck(
             map_style="mapbox://styles/mapbox/light-v9",
@@ -230,17 +267,15 @@ def render_overview_tab(engine):
         )
     )
 
-    # Stats summary
+    # Quick stats
     st.markdown("---")
     st.markdown(f"""
-    **Rolodex External Overview**
-    - Total entries: {len(df)}
-    - Unique organizations: {df['name'].nunique()}
-    - Unique programs: {df['program_name'].nunique()}
-    - Counties represented: {df['county'].nunique()}
-    """)
-
-    
+        **Summary**
+        - Entries shown: {len(f)}
+        - Unique organizations: {f['name'].nunique()}
+        - Unique programs: {f['program_name'].nunique()}
+        - Counties represented: {f['county'].nunique()}
+            """)
 
     
 
@@ -410,7 +445,7 @@ def render_matching_tab(engine, model):
         st.info("No programs available to evaluate.")
         return
 
-    st.caption(f"Evaluating {len(full_payload)} organizations from rolodex_external.")
+    
 
     # Chunking for LLM context
     def _batches(items, size):
@@ -427,7 +462,6 @@ def render_matching_tab(engine, model):
     num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for b_idx, batch in _batches(full_payload, BATCH_SIZE):
-        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
         batch_json = json.dumps(batch)
 
         resp_text = fn.match_programs_to_entrepreneur(entrepreneur, batch_json, model)
