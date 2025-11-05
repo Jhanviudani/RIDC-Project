@@ -40,9 +40,9 @@ def render_about_tab(engine=None):
     # --- Top CTA buttons
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
-        st.link_button("🚀 Entrepreneur Needs Survey — Get recommendations / request a call", "https://forms.gle/eMw5PY9QeTXDqPhy6")
+        st.link_button("🚀 Entrepreneur Needs Survey (Click  to fill out the form!)— Get recommendations / request a call", "https://forms.gle/eMw5PY9QeTXDqPhy6")
     with c2:
-        st.link_button("🧰 Service Provider Program Registration — List your program", "https://forms.gle/aae3SA6YJaZ7d1et5")
+        st.link_button("🧰 Service Provider Program Registration — List your program (Click to fill out the form!)", "https://forms.gle/aae3SA6YJaZ7d1et5")
     with c3:
         st.markdown(
             "<div style='padding:.6rem .8rem;border:1px solid #eee;border-radius:10px;'>"
@@ -638,10 +638,10 @@ def main():
     st.caption("Open the sections you want below. No tabs — everything on one page.")
     show_all = st.checkbox("Open all sections", value=False)
 
-    with st.expander("ℹ️ About", expanded=show_all):
+    with st.expander("ℹ️ About this app", expanded=show_all):
         render_about_tab(engine)
 
-    with st.expander("🗺️ Rolodex Overview (Map)", expanded=show_all):
+    with st.expander("🗺️ Map of the Ecosystem", expanded=show_all):
         render_overview_tab(engine)
 
     with st.expander("📊 Search Based on Needs and Services", expanded=show_all):
