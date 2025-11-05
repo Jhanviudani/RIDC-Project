@@ -515,11 +515,11 @@ def render_chat_tab(engine, model):
     hits = fn.nl_search_programs(engine, user_q, limit=20)
 
     if not hits.empty:
-        with st.expander("Retrieved matches (top 20)"):
-            st.dataframe(
-                hits[["program_name","provider_name","services","verticals","product_type","county","website"]],
-                use_container_width=True
-            )
+        st.markdown("**Search Results**")
+        st.dataframe(
+            hits[["program_name","provider_name","services","verticals","product_type","county","website"]],
+            use_container_width=True
+    )
 
     if hits.empty:
         answer = "I couldn’t find anything relevant in the catalog. Try different words (e.g., 'grant', 'loan', 'agriculture')."
