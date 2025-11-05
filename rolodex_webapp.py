@@ -29,7 +29,7 @@ def get_llm_model():
         openai_api_key=fn.get_secret("OPENAI_API_KEY"),
     )
 
-# ---------------- Tabs ----------------
+# ---------------- About ----------------
 def render_about_tab(engine=None):
     import pandas as pd
     import streamlit as st
@@ -40,13 +40,13 @@ def render_about_tab(engine=None):
     # --- Top CTA buttons
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
-        st.link_button("🚀 Entrepreneur Needs Survey -- Complete this form to get personalized recommendations or request a call.", "https://forms.gle/eMw5PY9QeTXDqPhy6")
+        st.link_button("🚀 Entrepreneur Needs Survey — Get recommendations / request a call", "https://forms.gle/eMw5PY9QeTXDqPhy6")
     with c2:
-        st.link_button("🧰 Service Provider Program Registration Form -- Have a program to support entrepreneurs? Add it using this form. ", "https://forms.gle/aae3SA6YJaZ7d1et5")
+        st.link_button("🧰 Service Provider Program Registration — List your program", "https://forms.gle/aae3SA6YJaZ7d1et5")
     with c3:
         st.markdown(
             "<div style='padding:.6rem .8rem;border:1px solid #eee;border-radius:10px;'>"
-            "We’re building in public. <b>Your feedback directly shapes this product.</b>"
+            "We’re in <b>beta</b>. <b>Your feedback directly shapes this product.</b>"
             "</div>",
             unsafe_allow_html=True
         )
@@ -65,14 +65,14 @@ def render_about_tab(engine=None):
         st.markdown("### What can you do here?")
         st.markdown(
             "- 🗺️ Explore the region’s innovation map\n"
-            "- 🔍 Browse & filter **programs** across Providers + Rolodex\n"
+            "- 🔍 Browse & filter **programs** (Rolodex External)\n"
             "- 🎯 Get **personalized recommendations** (private lookup)\n"
             "- 💬 Ask the database questions in plain English"
         )
     with colB:
         st.markdown("### How it works (30-second tour)")
         st.markdown(
-            "1. **We unify data** from provider intake + curated Rolodex.\n"
+            "1. **We unify data** from a curated Rolodex.\n"
             "2. **You search or ask** what you need (funding, labs, mentors, etc.).\n"
             "3. **We recommend** high-fit programs and explain why."
         )
@@ -83,30 +83,20 @@ def render_about_tab(engine=None):
             "- Data used only to improve recommendations"
         )
 
-    # --- Live metrics (optional if engine provided)
+    # --- Optional live metrics from rolodex_external only
     if engine is not None:
         try:
-            q_prov = "SELECT COUNT(DISTINCT provider_id) AS n FROM providers;"
-            q_prog = "SELECT COUNT(*) AS n FROM programs;"
-            prov_n = int(pd.read_sql(q_prov, engine).iloc[0]["n"])
-            prog_n = int(pd.read_sql(q_prog, engine).iloc[0]["n"])
-            try:
-                rolo_n = int(pd.read_sql("SELECT COUNT(*) AS n FROM rolodex_points;", engine).iloc[0]["n"])
-            except Exception:
-                rolo_n = None
-
+            rolo_n = int(pd.read_sql("SELECT COUNT(*) AS n FROM rolodex_external;", engine).iloc[0]["n"])
             st.markdown("---")
             st.markdown("### Snapshot")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Providers", f"{prov_n:,}")
-            m2.metric("Programs (intake)", f"{prog_n:,}")
-            m3.metric("Rolodex points", f"{(rolo_n or 0):,}")
+            m1, _m2, _m3 = st.columns(3)
+            m1.metric("Rolodex entries", f"{rolo_n:,}")
         except Exception:
-            pass  # quietly skip metrics if anything fails
+            pass
 
     st.markdown("---")
 
-    # --- Feedback (simple form that tries to write to a 'feedback' table)
+    # --- Feedback (simple form -> feedback table)
     st.markdown("### We’d love your feedback")
     with st.form("about_feedback"):
         fb_col1, fb_col2 = st.columns([2, 1])
@@ -126,7 +116,6 @@ def render_about_tab(engine=None):
                         "feedback_text": feedback_text.strip(),
                         "contact_email": (contact_email or "").strip()
                     }])
-                    import functions as fn
                     fn.insert_data_to_supabase(df, "feedback")
                     st.success("Thanks! Your feedback has been recorded. 🙌")
                 except Exception:
@@ -135,13 +124,13 @@ def render_about_tab(engine=None):
             else:
                 st.warning("Please add a bit of feedback before submitting.")
 
-    # --- FAQ (use HTML <details> to avoid Streamlit nested-expander error)
+    # --- FAQ (HTML <details> to avoid nested expander errors)
     st.markdown(
         """
         <details style="margin-top: .75rem;">
           <summary style="font-weight:600; cursor:pointer;">FAQ (short)</summary>
           <div style="margin-top:.5rem">
-            <p><b>Where does the data come from?</b> Provider intake forms + a curated Rolodex.</p>
+            <p><b>Where does the data come from?</b> A curated Rolodex of programs across the ecosystem.</p>
             <p><b>Are recommendations private?</b> Yes — we don't list entrepreneurs publicly and we hide internal sources in the UI.</p>
             <p><b>How can I get my program listed?</b> Use the Provider Intake button above.</p>
           </div>
@@ -150,57 +139,41 @@ def render_about_tab(engine=None):
         unsafe_allow_html=True
     )
 
-
+# ---------------- Rolodex Overview (map) ----------------
 def render_overview_tab(engine):
-    st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex")
+    st.subheader("📍 Map: Rolodex External")
 
-    # Providers & Entrepreneurs (ZIP → lat/long)
-    q_zip = """
-    SELECT provider_id AS id, provider_name AS name, address, zipcode, 'Provider' AS user
-    FROM providers
-    UNION
-    SELECT entrepreneur_id AS id, business_name AS name, address, zipcode, 'Entrepreneur' AS user
-    FROM entrepreneurs;
-    """
-    df_zip = fn.get_data(q_zip, engine)
-    df_zip = fn.add_coordinates(df_zip)                # adds latitude/longitude from zipcode
-    map_df_pe = df_zip.dropna(subset=["latitude", "longitude"])
-
-    # Rolodex points (already have lat/long)
     q_rolo = """
     SELECT
-      org_name AS name,
+      org_name   AS name,
       COALESCE(address,'') AS address,
-      latitude, longitude,
-      'Rolodex' AS user
-    FROM rolodex_points;
+      COALESCE(county_hq,'') AS county,
+      latitude, longitude
+    FROM rolodex_external;
     """
     try:
         df_rolo = fn.get_data(q_rolo, engine).dropna(subset=["latitude", "longitude"])
     except Exception:
-        df_rolo = pd.DataFrame(columns=["name", "address", "latitude", "longitude", "user"])
+        df_rolo = pd.DataFrame(columns=["name", "address", "county", "latitude", "longitude"])
 
-    # Colors
-    dynamic_color_map = {
-        "Provider": fn.hex_to_rgb("#00FF00"),
-        "Entrepreneur": fn.hex_to_rgb("#0000FF"),
-        "Rolodex": fn.hex_to_rgb("#FFA500"),
-    }
-    if not map_df_pe.empty:
-        map_df_pe["color"] = map_df_pe["user"].map(dynamic_color_map)
-    if not df_rolo.empty:
-        df_rolo["color"] = df_rolo["user"].map(dynamic_color_map)
+    if df_rolo.empty:
+        st.info("No map points to show yet.")
+        return
+
+    df_rolo["color"] = [fn.hex_to_rgb("#FFA500")] * len(df_rolo)
 
     # SWPA counties outline
     geojson_url = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
+    try:
+        us_counties = requests.get(geojson_url, timeout=10).json()
+    except Exception:
+        us_counties = {"type": "FeatureCollection", "features": []}
     swpa_fips = ["42003", "42005", "42007", "42019", "42051", "42059", "42063", "42073", "42125", "42129"]
-    us_counties = requests.get(geojson_url).json()
     swpa_geo = {
         "type": "FeatureCollection",
-        "features": [f for f in us_counties["features"] if f["id"] in swpa_fips],
+        "features": [f for f in us_counties.get("features", []) if f.get("id") in swpa_fips],
     }
 
-    # Layers
     layers = [
         pdk.Layer(
             "GeoJsonLayer",
@@ -214,7 +187,7 @@ def render_overview_tab(engine):
         ),
         pdk.Layer(
             "ScatterplotLayer",
-            data=map_df_pe,
+            data=df_rolo,
             get_position=["longitude", "latitude"],
             get_color="color",
             get_radius=1000,
@@ -223,42 +196,11 @@ def render_overview_tab(engine):
             radius_max_pixels=15,
         ),
     ]
-    if not df_rolo.empty:
-        layers.append(
-            pdk.Layer(
-                "ScatterplotLayer",
-                data=df_rolo,
-                get_position=["longitude", "latitude"],
-                get_color="color",
-                get_radius=1000,
-                pickable=True,
-                radius_min_pixels=5,
-                radius_max_pixels=15,
-            )
-        )
-
-    # Center the map
-    combined = pd.concat([map_df_pe, df_rolo], ignore_index=True) if not df_rolo.empty else map_df_pe
-    if combined.empty:
-        st.info("No map points to show yet.")
-        return
 
     view_state = pdk.ViewState(
-        latitude=combined["latitude"].mean(),
-        longitude=combined["longitude"].mean(),
+        latitude=df_rolo["latitude"].mean(),
+        longitude=df_rolo["longitude"].mean(),
         zoom=8,
-    )
-
-    # Legend
-    st.markdown(
-        """
-        <div style='display:flex;gap:16px;align-items:center;margin-bottom:8px'>
-          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#00FF00'></div>Provider</span>
-          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#0000FF'></div>Entrepreneur</span>
-          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#FFA500'></div>Rolodex</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
     )
 
     st.pydeck_chart(
@@ -266,133 +208,88 @@ def render_overview_tab(engine):
             map_style="mapbox://styles/mapbox/light-v9",
             initial_view_state=view_state,
             layers=layers,
-            tooltip={"html": "<b>{name}</b><br/>{user}<br/>{address}"},
+            tooltip={"html": "<b>{name}</b><br/>{county}<br/>{address}"},
         )
     )
 
-    st.markdown(
-        f"""
-        **Stats**
-        - Providers: {len(map_df_pe[map_df_pe['user']=='Provider'])}
-        - Entrepreneurs: {len(map_df_pe[map_df_pe['user']=='Entrepreneur'])}
-        - Rolodex points: {len(df_rolo) if not df_rolo.empty else 0}
-        """
-    )
+    st.markdown(f"**Rolodex External points:** {len(df_rolo)}")
 
+# ---------------- Needs (ROL0DEX_EXTERNAL ONLY) ----------------
 def render_needs_tab(engine):
-    st.subheader("📊 Search Based on Needs and Services")
-    q_needs = """
-    SELECT en.entrepreneur_id, e.county, en.need, en.service
-    FROM entrepreneur_needs en
-    JOIN entrepreneurs e
-      ON en.entrepreneur_id = e.entrepreneur_id
-     AND en.date_intake = e.date_intake;
+    st.subheader("📊 Services by County (from Rolodex External)")
+    q = """
+    SELECT
+      COALESCE(county_hq,'') AS county,
+      COALESCE(primary_service,'') AS primary_service
+    FROM rolodex_external;
     """
-    needs_df = fn.get_data(q_needs, engine)
+    df = fn.get_data(q, engine)
 
-    if needs_df.empty:
-        st.info("No needs data available.")
+    if df.empty:
+        st.info("No data available.")
         return
 
-    services = sorted(needs_df["service"].dropna().unique().tolist())
-    selected = st.multiselect("Filter by service(s)", services, default=services)
-    filtered = needs_df[needs_df["service"].isin(selected)] if selected else needs_df
+    services = sorted(df["primary_service"].dropna().unique().tolist())
+    default_pick = services[: min(6, len(services))]
+    selected = st.multiselect("Filter by service(s)", services, default=default_pick)
+    filtered = df[df["primary_service"].isin(selected)] if selected else df
 
-    counts = filtered.groupby(["county", "need"]).size().reset_index(name="count")
-    fig = px.bar(counts, x="county", y="count", color="need", title="Needs by County")
+    counts = filtered.groupby(["county", "primary_service"]).size().reset_index(name="count")
+    fig = px.bar(counts, x="county", y="count", color="primary_service", title="Service availability by county")
     fig.update_layout(barmode="stack", title_x=0.5)
-    st.plotly_chart(fig)
+    st.plotly_chart(fig, use_container_width=True)
 
+# ---------------- Programs (ROL0DEX_EXTERNAL ONLY) ----------------
 def render_programs_tab(engine):
-    st.subheader("🔍📄 Search Based on Service Providers and Programs")
-
-    # A) Provider programs
-    q_form = """
-    SELECT DISTINCT ON (t2.provider_id, t2.program_id)
-      t2.provider_id, t2.provider_name, t2.program_id, t2.program_name,
-      t2.website, t2.contact_name, t2.contact_email,
-      t1.county, t1.address,
-      t2.services, t2.verticals, t2.product_type,
-      t2.scraped_description
-    FROM programs t2
-    JOIN providers t1 ON t1.provider_id = t2.provider_id
-    ORDER BY t2.provider_id, t2.program_id, t2.date_intake_form DESC;
-    """
-    df_form = fn.get_data(q_form, engine)
-    df_form["source"] = "providers"
-
-    # B) Rolodex programs (flattened)
-    q_rolo = """
+    st.subheader("🔍📄 Programs (from Rolodex External)")
+    q = """
     SELECT
       org_name AS provider_name,
       program_name,
       COALESCE(website,'') AS website,
-      '' AS contact_name,
-      '' AS contact_email,
       COALESCE(county_hq,'') AS county,
       COALESCE(address,'') AS address,
       COALESCE(primary_service,'') AS services,
-      COALESCE(attributes->>'Vertical(s) Summary','')     AS verticals,
-      COALESCE(attributes->>'Product Type(s) Summary','') AS product_type,
+      COALESCE(verticals_summary,'') AS verticals,
+      COALESCE(product_types_summary,'') AS product_type,
       COALESCE(full_description, description, '') AS scraped_description
-    FROM rolodex_points;
+    FROM rolodex_external;
     """
-    try:
-        df_rolo = fn.get_data(q_rolo, engine)
-    except Exception:
-        df_rolo = pd.DataFrame()
-    df_rolo["source"] = "rolodex"
+    df = fn.get_data(q, engine)
 
-    # C) Union
-    common = [
-        "provider_name", "program_name", "website", "contact_name", "contact_email",
-        "county", "address", "services", "verticals", "product_type",
-        "scraped_description", "source"
-    ]
-    for c in common:
-        if c not in df_form: df_form[c] = ""
-        if c not in df_rolo: df_rolo[c] = ""
-    df_all = pd.concat([df_form[common], df_rolo[common]], ignore_index=True)
-
-    if df_all.empty:
+    if df.empty:
         st.info("No programs found yet.")
         return
 
     # Filters
     col1, col2, col3 = st.columns(3)
     with col1:
-        provider = st.selectbox("Provider", ["All"] + sorted(df_all["provider_name"].dropna().unique().tolist()))
+        provider = st.selectbox("Provider", ["All"] + sorted(df["provider_name"].dropna().unique().tolist()))
     with col2:
-        county = st.selectbox("County", ["All"] + sorted(df_all["county"].dropna().unique().tolist()))
+        county = st.selectbox("County", ["All"] + sorted(df["county"].dropna().unique().tolist()))
     with col3:
-        src = st.selectbox("Source", ["All", "providers", "rolodex"])
+        v = st.selectbox("Vertical", ["All"] + fn.extract_unique_items(df, "verticals"))
+    p = st.selectbox("Product Type", ["All"] + fn.extract_unique_items(df, "product_type"))
 
-    verticals = fn.extract_unique_items(df_all, "verticals")
-    product_types = fn.extract_unique_items(df_all, "product_type")
-    v = st.selectbox("Vertical", ["All"] + verticals)
-    p = st.selectbox("Product Type", ["All"] + product_types)
-
-    f = df_all.copy()
+    f = df.copy()
     if provider != "All": f = f[f["provider_name"] == provider]
     if county   != "All": f = f[f["county"] == county]
-    if src      != "All": f = f[f["source"] == src]
     if v        != "All": f = f[f["verticals"].str.contains(v, na=False)]
     if p        != "All": f = f[f["product_type"].str.contains(p, na=False)]
 
     st.markdown(f"**{len(f)}** program(s) match the selected filters.")
     st.dataframe(f, use_container_width=True)
 
-
-
+# ---------------- Matching (ROL0DEX_EXTERNAL ONLY + privacy-friendly) ----------------
 def render_matching_tab(engine, model):
-    """Renders the Matching tool tab (Providers + Rolodex) with robust JSON parsing and privacy-friendly selection."""
+    """Renders the Matching tool tab from rolodex_external only, with private entrepreneur lookup."""
     import json
     import pandas as pd
     import difflib, re
 
     st.subheader("🎯 Program Recommendations ")
 
-    # --------- Load entrepreneurs + needs ----------
+    # Load entrepreneurs + needs (for profile only)
     q_ent = """
       SELECT DISTINCT ON (entrepreneur_id)
              entrepreneur_id, name, business_name, email, phone, address, zipcode,
@@ -413,7 +310,7 @@ def render_matching_tab(engine, model):
         st.info("No entrepreneurs found yet.")
         return
 
-    # --------- Privacy-friendly entrepreneur selection (no public dropdown) ----------
+    # Privacy-friendly entrepreneur selection (no public dropdown)
     typed_name = st.text_input(
         "Enter the name you used on the form",
         value="",
@@ -424,14 +321,14 @@ def render_matching_tab(engine, model):
         st.info("Enter your name to load your profile and needs.")
         return
 
-    # 1) Exact, case-insensitive match on either 'name' or 'business_name'
+    # 1) Exact match on 'name' or 'business_name'
     exact = df_entrep[
         (df_entrep["name"].fillna("").str.casefold() == typed_name.casefold()) |
         (df_entrep["business_name"].fillna("").str.casefold() == typed_name.casefold())
     ]
     candidates = exact
 
-    # 2) If no exact match, try "contains" (still case-insensitive)
+    # 2) Contains fallback
     if candidates.empty:
         patt = re.escape(typed_name)
         contains = df_entrep[
@@ -440,7 +337,7 @@ def render_matching_tab(engine, model):
         ]
         candidates = contains
 
-    # 3) If still nothing, use a simple fuzzy top-1 against concatenated name fields
+    # 3) Fuzzy fallback
     if candidates.empty:
         keys = (df_entrep["name"].fillna("") + " | " + df_entrep["business_name"].fillna("")).tolist()
         best = difflib.get_close_matches(typed_name, keys, n=1, cutoff=0.8)
@@ -452,7 +349,7 @@ def render_matching_tab(engine, model):
         st.warning("We couldn’t find a record with that name. Please check the spelling or try a different variation.")
         return
 
-    # Prefer exact-match rows first, if multiple
+    # Prefer exact matches if multiple
     if len(candidates) > 1:
         exact_rows = candidates[
             (candidates["name"].fillna("").str.casefold() == typed_name.casefold()) |
@@ -461,7 +358,6 @@ def render_matching_tab(engine, model):
         if not exact_rows.empty:
             candidates = exact_rows
 
-    # Final pick
     row = candidates.iloc[0]
     eid = row["entrepreneur_id"]
     needs_for_e = df_needs[df_needs["entrepreneur_id"] == eid][["service", "need"]]
@@ -469,7 +365,7 @@ def render_matching_tab(engine, model):
     entrepreneur = row.to_dict()
     entrepreneur["needs_needed"] = needs_for_e.to_dict(orient="records")
 
-    # --------- Build combined provider payload (providers + rolodex) ----------
+    # Build provider/program payload (rolodex_external only)
     try:
         payload = fn.build_matching_payload(
             engine,
@@ -479,22 +375,18 @@ def render_matching_tab(engine, model):
         st.error(f"Failed to build provider payload: {e}")
         return
 
-    # Keep only providers that actually have at least one program
     full_payload = [p for p in payload if p.get("programs")]
     if not full_payload:
         st.info("No programs available to evaluate.")
         return
 
-    total_form  = sum(1 for p in full_payload if p.get("source") == "providers")
-    total_rolo  = sum(1 for p in full_payload if p.get("source") == "rolodex")
-    st.caption(f"Evaluating providers ")
+    st.caption(f"Evaluating {len(full_payload)} organizations from rolodex_external.")
 
-    # Helper to chunk the payload so we don't overflow the model context
+    # Chunking for LLM context
     def _batches(items, size):
         for i in range(0, len(items), size):
             yield i // size + 1, items[i:i+size]
-
-    BATCH_SIZE = 60  # tune if you want larger/smaller batches
+    BATCH_SIZE = 60
 
     run = st.button("Run Program Recommendation Assistant")
     if not run:
@@ -505,16 +397,14 @@ def render_matching_tab(engine, model):
     num_batches = (len(full_payload) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for b_idx, batch in _batches(full_payload, BATCH_SIZE):
-        st.write(f"Processing")
+        st.write(f"Processing batch {b_idx}/{num_batches} · providers in batch: {len(batch)}")
         batch_json = json.dumps(batch)
 
-        # Call the LLM and parse JSON safely
         resp_text = fn.match_programs_to_entrepreneur(entrepreneur, batch_json, model)
         try:
             parsed = fn.coerce_json_array(resp_text)
-            # tag results with batch for debugging
             for m in parsed:
-                m["batch_index"] = b_idx
+                m["batch_index"] = b_idx  # internal; will drop in display
             all_matches.extend(parsed)
         except Exception as e:
             st.error(f"Failed to generate recommendations: {e}")
@@ -526,7 +416,7 @@ def render_matching_tab(engine, model):
         st.error("No matches returned from any batch.")
         return
 
-    # --------- Deduplicate & finalize scores ----------
+    # Deduplicate & finalize scores
     deduped, seen = [], set()
     for m in all_matches:
         key = (str(m.get("provider_id")), m.get("program_name"))
@@ -534,7 +424,6 @@ def render_matching_tab(engine, model):
             continue
         seen.add(key)
 
-        # ensure numeric scores and a final_score
         for k in ("distance_score", "identity_score", "service_score", "need_satisfaction_score"):
             try:
                 m[k] = float(m.get(k, 0) or 0)
@@ -550,7 +439,7 @@ def render_matching_tab(engine, model):
 
         deduped.append(m)
 
-    # --------- Summaries ----------
+    # Summaries
     st.subheader("Entrepreneur summary")
     try:
         summary = fn.summarize_user_identity_and_needs(entrepreneur, model)
@@ -565,27 +454,20 @@ def render_matching_tab(engine, model):
     except Exception:
         st.write("Recommendation summary unavailable.")
 
-    # --------- Table ----------
+    # Structured table: drop batch index and include website (via catalog merge)
     matches_df = pd.DataFrame(deduped).sort_values("final_score", ascending=False)
+    try:
+        catalog = fn.build_program_catalog(engine)[["provider_name","program_name","website"]]
+        matches_df = matches_df.merge(catalog, how="left", on=["provider_name","program_name"])
+    except Exception:
+        if "website" not in matches_df.columns:
+            matches_df["website"] = None
 
-    # Remove debug/batch columns, backend source, and reorder for clarity
-    matches_df = matches_df.drop(columns=["batch_index", "source"], errors="ignore")
+    if "batch_index" in matches_df.columns:
+        matches_df = matches_df.drop(columns=["batch_index"], errors="ignore")
+    # Avoid showing any internal source fields if present
+    matches_df = matches_df.drop(columns=["source"], errors="ignore")
 
-    # If 'website' not already present, fill from payload (match by provider_id/program_name)
-    if "website" not in matches_df.columns:
-        matches_df["website"] = None
-    for i, row_ in matches_df.iterrows():
-        if not row_.get("website"):
-            pid = str(row_.get("provider_id"))
-            pname = str(row_.get("program_name", "")).lower()
-            for prov in full_payload:
-                if str(prov.get("provider_id")) == pid:
-                    for prog in prov.get("programs", []):
-                        if pname == str(prog.get("program_name", "")).lower():
-                            matches_df.at[i, "website"] = prog.get("website")
-                            break
-
-    # Display
     st.subheader(f"Structured Recommendations · {len(matches_df)} unique results")
     st.dataframe(
         matches_df[
@@ -605,42 +487,33 @@ def render_matching_tab(engine, model):
         except Exception as e:
             st.error(f"Failed to save: {e}")
 
-
-
-
-
+# ---------------- Chat (ROL0DEX_EXTERNAL ONLY) ----------------
 def render_chat_tab(engine, model):
-    """Chat with the programs/providers database ."""
-    st.subheader("💬 Chat with the Database ")
-    st.caption("Ask natural-language questions like: "
-               "“Is there a service provider that can help with funding for my agrotech startup?”")
+    """Chat with the catalog (rolodex_external only)."""
+    st.subheader("💬 Ask the Ecosystem")
+    st.caption("Ask questions like: “Is there a provider that can help with grants for a manufacturing startup?”")
 
-    # Chat history
     if "qa_msgs" not in st.session_state:
         st.session_state.qa_msgs = [
             {"role": "assistant",
              "content": "Hi! Ask what you need (funding, prototyping, mentorship, specific verticals, etc.)."}
         ]
 
-    # Render history
     for m in st.session_state.qa_msgs:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
-    # Input
     user_q = st.chat_input("Type your question")
     if not user_q:
         return
 
-    # Show user message
     st.session_state.qa_msgs.append({"role": "user", "content": user_q})
     with st.chat_message("user"):
         st.markdown(user_q)
 
-    # Retrieve candidates from BOTH sources
+    # This relies on fn.nl_search_programs() which should already be rolodex_external-only
     hits = fn.nl_search_programs(engine, user_q, limit=20)
 
-    # Show retrieved rows for transparency
     if not hits.empty:
         with st.expander("Retrieved matches (top 20)"):
             st.dataframe(
@@ -648,33 +521,27 @@ def render_chat_tab(engine, model):
                 use_container_width=True
             )
 
-    # Let the model compose the answer using only those rows
     if hits.empty:
         answer = "I couldn’t find anything relevant in the catalog. Try different words (e.g., 'grant', 'loan', 'agriculture')."
     else:
         answer = fn.answer_query_over_catalog(model, user_q, hits)
 
-    # Show assistant answer and store
     st.session_state.qa_msgs.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(answer)
 
-
-
+# ---------------- Main ----------------
 def main():
     st.title("SWPA Innovation Ecosystem")
 
-    # Reuse the cached resources
     engine = get_db_engine()
     model = get_llm_model()
 
-    # Optional quick toggles
     st.caption("Open the sections you want below. No tabs — everything on one page.")
     show_all = st.checkbox("Open all sections", value=False)
 
-    # Each section is an expander; turn any on/off as you like
     with st.expander("ℹ️ About", expanded=show_all):
-        render_about_tab()
+        render_about_tab(engine)
 
     with st.expander("🗺️ Rolodex Overview (Map)", expanded=show_all):
         render_overview_tab(engine)
@@ -690,7 +557,6 @@ def main():
 
     with st.expander("💬 Chat with the Database", expanded=show_all):
         render_chat_tab(engine, model)
-
 
 if __name__ == "__main__":
     main()
