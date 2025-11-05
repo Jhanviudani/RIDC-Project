@@ -141,141 +141,165 @@ def render_about_tab(engine=None):
 
 # ---------------- Rolodex Overview (map) ----------------
 def render_overview_tab(engine):
-    """Displays an interactive map from rolodex_external using 'Latitude Coordinates' & 'Longitude Coordinates'."""
+    """Map view using providers, entrepreneurs, and the ORIGINAL 'rolodex' table."""
     import pandas as pd
     import requests
     import pydeck as pdk
     import streamlit as st
     import functions as fn
 
-    st.subheader("📍 Map of Service Providers and Programs")
+    st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex (original)")
 
-    # Pull only what we need from rolodex_external
-    q = """
+    # ---- Providers & Entrepreneurs (ZIP -> lat/long) ----
+    q_zip = """
+    SELECT provider_id AS id, provider_name AS name, address, zipcode, 'Provider' AS user
+    FROM providers
+    UNION
+    SELECT entrepreneur_id AS id, business_name AS name, address, zipcode, 'Entrepreneur' AS user
+    FROM entrepreneurs;
+    """
+    df_zip = fn.get_data(q_zip, engine)
+    df_zip = fn.add_coordinates(df_zip)  # adds latitude / longitude from ZIP
+    pe_df = df_zip.dropna(subset=["latitude", "longitude"]).copy()
+
+    # ---- Rolodex (ORIGINAL TABLE) ----
+    # Expecting float/double columns: latitude, longitude
+    q_rolo = """
     SELECT
       org_name AS name,
-      program_name,
       COALESCE(address,'') AS address,
-      COALESCE(county_hq,'') AS county,
-      COALESCE(primary_service,'') AS service,
-      "Latitude Coordinates"   AS lat_raw,
-      "Longitude Coordinates"  AS lon_raw
-    FROM rolodex_external;
+      latitude, longitude
+    FROM rolodex;
     """
     try:
-        df = fn.get_data(q, engine)
+        rolo_df = fn.get_data(q_rolo, engine).copy()
     except Exception:
-        df = pd.DataFrame(columns=["name","program_name","address","county","service","lat_raw","lon_raw"])
+        rolo_df = pd.DataFrame(columns=["name", "address", "latitude", "longitude"])
 
-    # Coerce lat/lon from the sheet columns
-    def _to_float(v):
-        try:
-            if v is None: return None
-            s = str(v).strip().replace(",", "")
-            if s == "" or s.lower() in {"nan", "none"}: return None
-            return float(s)
-        except Exception:
-            return None
+    # Clean & keep only valid coords
+    for col in ("latitude", "longitude"):
+        if col in rolo_df.columns:
+            rolo_df[col] = pd.to_numeric(rolo_df[col], errors="coerce")
+    rolo_df = rolo_df.dropna(subset=["latitude", "longitude"]).copy()
+    if not rolo_df.empty:
+        rolo_df["user"] = "Rolodex"
 
-    df["latitude"]  = df["lat_raw"].apply(_to_float)
-    df["longitude"] = df["lon_raw"].apply(_to_float)
+    # ---- Color mapping ----
+    def _hex_to_rgb(h: str):
+        h = h.strip().lstrip("#")
+        return [int(h[i:i+2], 16) for i in (0, 2, 4)]
+    color_map = {
+        "Provider": _hex_to_rgb("#00FF00"),
+        "Entrepreneur": _hex_to_rgb("#0000FF"),
+        "Rolodex": _hex_to_rgb("#FFA500"),
+    }
+    if not pe_df.empty:
+        pe_df["color"] = pe_df["user"].map(color_map)
+    if not rolo_df.empty:
+        rolo_df["color"] = rolo_df["user"].map(color_map)
 
-    # Filter valid coordinates
-    df = df.dropna(subset=["latitude","longitude"]).copy()
-    df = df[(df["latitude"].between(-90, 90)) & (df["longitude"].between(-180, 180))]
-
-    if df.empty:
-        st.info("No valid coordinates found in rolodex_external. Check the 'Latitude Coordinates' / 'Longitude Coordinates' values.")
-        return
-
-    # Simple filters (no expanders to avoid nesting issues)
-    col1, col2 = st.columns(2)
-    with col1:
-        sel_county = st.selectbox("Filter by County", ["All"] + sorted(df["county"].dropna().unique().tolist()))
-    with col2:
-        sel_service = st.selectbox("Filter by Primary Service", ["All"] + sorted(df["service"].dropna().unique().tolist()))
-
-    f = df
-    if sel_county != "All":
-        f = f[f["county"] == sel_county]
-    if sel_service != "All":
-        f = f[f["service"] == sel_service]
-
-    if f.empty:
-        st.warning("No results for the selected filters.")
-        return
-
-    # One color for all rolodex points (orange) — or derive by service if you want
-    f["color"] = [fn.hex_to_rgb("#FFA500")] * len(f)
-
-    # Optional SWPA county outline for context (kept from your older map)
-    geojson_url = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
+    # ---- SWPA county outline (optional) ----
     try:
+        geojson_url = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
+        swpa_fips = ["42003", "42005", "42007", "42019", "42051", "42059", "42063", "42073", "42125", "42129"]
         us_counties = requests.get(geojson_url, timeout=10).json()
-        swpa_fips = ["42003","42005","42007","42019","42051","42059","42063","42073","42125","42129"]
-        swpa_geo = {"type": "FeatureCollection",
-                    "features": [g for g in us_counties.get("features", []) if g.get("id") in swpa_fips]}
-        outline_layer = pdk.Layer(
+        swpa_geo = {
+            "type": "FeatureCollection",
+            "features": [f for f in us_counties["features"] if f["id"] in swpa_fips],
+        }
+        geo_layer = pdk.Layer(
             "GeoJsonLayer",
             data=swpa_geo,
             opacity=0.2,
             stroked=True,
             filled=True,
-            get_fill_color=[220, 220, 220],
-            get_line_color=[80, 80, 80],
+            get_fill_color=[200, 200, 200],
+            get_line_color=[0, 0, 0],
             get_line_width=2,
         )
-        layers = [outline_layer]
     except Exception:
-        layers = []
+        geo_layer = None
 
-    # Points layer
-    points_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=f,
-        get_position=["longitude", "latitude"],
-        get_color="color",
-        get_radius=900,
-        pickable=True,
-        radius_min_pixels=4,
-        radius_max_pixels=12,
+    # ---- Build layers ----
+    layers = []
+    if geo_layer:
+        layers.append(geo_layer)
+
+    if not pe_df.empty:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=pe_df,
+                get_position=["longitude", "latitude"],
+                get_color="color",
+                get_radius=1000,
+                pickable=True,
+                radius_min_pixels=5,
+                radius_max_pixels=15,
+            )
+        )
+    if not rolo_df.empty:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=rolo_df,
+                get_position=["longitude", "latitude"],
+                get_color="color",
+                get_radius=1000,
+                pickable=True,
+                radius_min_pixels=5,
+                radius_max_pixels=15,
+            )
+        )
+
+    # ---- Nothing to plot? ----
+    if not layers or (len(layers) == 1 and geo_layer is not None):
+        st.info("No valid map points to show yet (check ZIPs or rolodex latitude/longitude).")
+        return
+
+    # ---- Center view on available points ----
+    combined = pd.concat(
+        [df for df in [pe_df, rolo_df] if not df.empty],
+        ignore_index=True
     )
-    layers.append(points_layer)
-
-    # Center view
     view_state = pdk.ViewState(
-        latitude=float(f["latitude"].mean()),
-        longitude=float(f["longitude"].mean()),
+        latitude=float(combined["latitude"].mean()),
+        longitude=float(combined["longitude"].mean()),
         zoom=8,
     )
 
+    # ---- Legend ----
+    st.markdown(
+        """
+        <div style='display:flex;gap:16px;align-items:center;margin-bottom:8px'>
+          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#00FF00'></div>Provider</span>
+          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#0000FF'></div>Entrepreneur</span>
+          <span style='display:flex;gap:6px;align-items:center'><div style='width:14px;height:14px;background:#FFA500'></div>Rolodex</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ---- Render ----
     st.pydeck_chart(
         pdk.Deck(
             map_style="mapbox://styles/mapbox/light-v9",
             initial_view_state=view_state,
             layers=layers,
-            tooltip={
-                "html": (
-                    "<b>{name}</b><br/>"
-                    "Program: {program_name}<br/>"
-                    "Service: {service}<br/>"
-                    "County: {county}<br/>"
-                    "{address}"
-                ),
-                "style": {"backgroundColor": "white", "color": "black"}
-            },
+            tooltip={"html": "<b>{name}</b><br/>{user}<br/>{address}"},
         )
     )
 
-    # Quick stats
-    st.markdown("---")
-    st.markdown(f"""
-        **Summary**
-        - Entries shown: {len(f)}
-        - Unique organizations: {f['name'].nunique()}
-        - Unique programs: {f['program_name'].nunique()}
-        - Counties represented: {f['county'].nunique()}
-            """)
+    # ---- Quick counts ----
+    st.markdown(
+        f"""
+        **Stats**
+        - Providers: {len(pe_df[pe_df['user']=='Provider'])}
+        - Entrepreneurs: {len(pe_df[pe_df['user']=='Entrepreneur'])}
+        - Rolodex (original): {len(rolo_df)}
+        """
+    )
+
 
     
 
