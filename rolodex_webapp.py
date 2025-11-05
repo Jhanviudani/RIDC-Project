@@ -148,7 +148,7 @@ def render_overview_tab(engine):
     import streamlit as st
     import functions as fn
 
-    st.subheader("📍 Map: Providers, Entrepreneurs, Rolodex (original)")
+    st.subheader("📍 Map")
 
     # ---- Providers & Entrepreneurs (ZIP -> lat/long) ----
     q_zip = """

@@ -52,6 +52,28 @@ def connect_db():
         c.execute(text("SELECT 1"))
     return engine
 
+def add_coordinates(df):
+    """
+    Adds latitude and longitude to a DataFrame that has a 'zipcode' column.
+    Uses pgeocode to estimate coordinates based on ZIP code centroids.
+    """
+    import pgeocode
+    import pandas as pd
+
+    df = df.copy()
+    if "zipcode" not in df.columns or df["zipcode"].isna().all():
+        df["latitude"] = None
+        df["longitude"] = None
+        return df
+
+    nomi = pgeocode.Nominatim("us")
+    zips = pd.Series(df["zipcode"].astype(str).unique()).dropna()
+    coords = nomi.query_postal_code(zips.tolist())
+    lookup = {str(z): (r.latitude, r.longitude) for z, r in zip(zips, coords.itertuples(index=False))}
+
+    df["latitude"]  = df["zipcode"].astype(str).map(lambda z: lookup.get(z, (None, None))[0])
+    df["longitude"] = df["zipcode"].astype(str).map(lambda z: lookup.get(z, (None, None))[1])
+    return df
 
 # ---------------- Simple query helpers ----------------
 def get_data(sql: str, engine) -> pd.DataFrame:
